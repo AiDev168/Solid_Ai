@@ -110,7 +110,6 @@ def _point_plane_distance(point: tuple[float, float, float], plane_point: tuple[
 
 
 def _face_support_matches(binding_evidence: Mapping[str, Any], sketch_result: Mapping[str, Any]) -> bool:
-    """Verify that create_sketch really landed on the resolved planar face."""
     result_geometry = sketch_result.get("result_geometry")
     frame = result_geometry.get("frame") if isinstance(result_geometry, Mapping) else None
     if not isinstance(frame, Mapping):
@@ -136,6 +135,7 @@ def _support_mismatch_error(binding: Any) -> RuntimeError:
 
 class MotorBracketRuntimeV1:
     """Execute semantic features through one shared evidence/reference/recovery lifecycle."""
+
     def __init__(self, session: RuntimeSession, plan: MotorBracketPlanV1 = MOTOR_BRACKET_V1):
         self.session = session
         self.plan = plan
@@ -224,22 +224,24 @@ class MotorBracketRuntimeV1:
     async def _fillet(self, feature: FeatureSpec) -> None:
         raw_reference = feature.params["selection"]["reference"]
         edge_binding = await self._resolve_outer_edges(raw_reference)
-        edge_indices = edge_indices_json(edge_binding)
         try:
-            call = lower_fillet(radius_m=float(feature.params["radius_m"]), edge_indices=edge_indices)
+            call = lower_fillet(radius_m=float(feature.params["radius_m"]), edge_indices=edge_indices_json(edge_binding))
             await self._record(feature.feature_id, call["tool"], await _call(self.session, call["tool"], call["params"]))
             self.report.feature_status[feature.feature_id] = "COMPLETED"
             return
         except RuntimeError as exc:
             failure = normalize_runtime_failure(exc)
+            diagnosis = self.recovery.controller.diagnose_and_recover
+            if failure.code not in {"STALE_EDGE_SELECTOR", "STALE_REFERENCE"}:
+                raise exc
         fresh = await _call(self.session, "analyze_model", {"analysis_type": "edges"})
         fresh_evidence = edge_evidence(fresh, int(fresh.get("state_version", 0)))
-        diagnosis_entries = []
         rebound_indices: list[int] = []
+        diagnosis_entries: list[dict[str, Any]] = []
         for binding in edge_binding.bindings:
             anchor = make_anchor({"kind": "edge", **binding.evidence, "backend_index": binding.backend_index}, source_state_version=binding.state_version)
-            diagnosis, recovery = self.recovery.controller.diagnose_and_recover(code=failure.code, message=failure.message, evidence=TopologyRecoveryEvidence(edge_anchor=anchor, edge_candidates=fresh_evidence.candidates, target_edge_state_version=fresh_evidence.state_version), max_attempts=1)
-            diagnosis_entries.append({"diagnosis": diagnosis, "recovery": recovery})
+            diagnosis_result, recovery = diagnosis(code=failure.code, message=failure.message, evidence=TopologyRecoveryEvidence(edge_anchor=anchor, edge_candidates=fresh_evidence.candidates, target_edge_state_version=fresh_evidence.state_version), max_attempts=1)
+            diagnosis_entries.append({"diagnosis": diagnosis_result, "recovery": recovery})
             if recovery is None or not recovery.recovered:
                 raise RuntimeError(f"{failure.code}: topology recovery failed for edge {binding.backend_index}")
             rebound = recovery.attempts[-1].result.edge_binding
