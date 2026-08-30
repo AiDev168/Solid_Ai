@@ -25,6 +25,17 @@ from .recovery_assets import (
     normalize_runtime_failure,
     rebind_anchor,
 )
+from .reference_resolution_v1 import (
+    ReferenceBinding,
+    ReferenceEvidence,
+    ReferenceIntent,
+    ReferenceResolutionError,
+    edge_evidence,
+    edge_indices_json,
+    face_evidence,
+    face_index_json,
+    resolve_reference,
+)
 
 __all__ = [
     "CAPABILITIES",
@@ -33,6 +44,10 @@ __all__ = [
     "RecoveryAssets",
     "RecoveryController",
     "RecoveryRegistry",
+    "ReferenceBinding",
+    "ReferenceEvidence",
+    "ReferenceIntent",
+    "ReferenceResolutionError",
     "TopologyAnchor",
     "TopologyBinding",
     "TopologyRecoveryEvidence",
@@ -40,6 +55,10 @@ __all__ = [
     "TopologyRecoverySolver",
     "describe_capabilities",
     "diagnose_failure",
+    "edge_evidence",
+    "edge_indices_json",
+    "face_evidence",
+    "face_index_json",
     "get_capability",
     "lower_boss",
     "lower_fillet",
@@ -48,4 +67,5 @@ __all__ = [
     "normalize_runtime_failure",
     "rebind_anchor",
     "require_capability",
+    "resolve_reference",
 ]
