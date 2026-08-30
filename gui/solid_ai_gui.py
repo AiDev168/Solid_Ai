@@ -10,10 +10,13 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 from typing import Any
 
+from integration.aidesigner_assets import CAPABILITIES, require_capability
+
 REPO_ROOT = Path(__file__).resolve().parents[1] / "vendor" / "q3ds-solidworks-mcp"
 PYTHON_EXE = REPO_ROOT / ".venv" / "Scripts" / "python.exe"
 SEMANTIC_SERVER = REPO_ROOT / "adapters" / "codex" / "server.py"
 LEGACY_SERVER = REPO_ROOT / "adapters" / "claude" / "legacy_server.py"
+
 
 class McpWorker:
     """Persistent MCP stdio client on a dedicated asyncio event loop."""
@@ -59,14 +62,15 @@ class McpWorker:
         self.stop.set()
         if self.thread and self.thread.is_alive(): self.thread.join(timeout=5)
 
+
 class SolidAiApp:
     def __init__(self, root: tk.Tk) -> None:
-        self.root=root; self.root.title("Solid AI — SolidPilot Laboratory v0.3"); self.root.geometry("1120x840")
+        self.root=root; self.root.title("Solid AI — SolidPilot Laboratory v0.4"); self.root.geometry("1120x840")
         self.events=queue.Queue(); self.worker=None; self.mode=tk.StringVar(value="semantic"); self.status=tk.StringVar(value="Disconnected"); self.tool_name=tk.StringVar(value="solidworks_status")
         self._build_ui(); self.root.after(100,self._poll_events); self.root.protocol("WM_DELETE_WINDOW",self.shutdown)
     def _build_ui(self) -> None:
         top=ttk.Frame(self.root,padding=12); top.pack(fill="x")
-        ttk.Label(top,text="Solid AI",font=("Segoe UI",18,"bold")).pack(side="left"); ttk.Label(top,text="SolidPilot Laboratory v0.3",font=("Segoe UI",10)).pack(side="left",padx=10)
+        ttk.Label(top,text="Solid AI",font=("Segoe UI",18,"bold")).pack(side="left"); ttk.Label(top,text="SolidPilot Laboratory v0.4",font=("Segoe UI",10)).pack(side="left",padx=10)
         ttk.Button(top,text="Connect",command=self.connect).pack(side="right"); ttk.Button(top,text="Disconnect",command=self.disconnect).pack(side="right",padx=6)
         mode=ttk.LabelFrame(self.root,text="MCP surface",padding=10); mode.pack(fill="x",padx=12,pady=(0,8))
         ttk.Radiobutton(mode,text="Semantic (current)",value="semantic",variable=self.mode).pack(side="left"); ttk.Radiobutton(mode,text="Legacy CAD tools (development)",value="legacy",variable=self.mode).pack(side="left",padx=20)
@@ -79,7 +83,7 @@ class SolidAiApp:
         ttk.Label(tools,text="Arguments (JSON object)").pack(anchor="w",pady=(10,4)); self.args=scrolledtext.ScrolledText(tools,height=7,wrap=tk.WORD,font=("Consolas",10)); self.args.pack(fill="x"); self.args.insert("1.0",'{"launch_if_needed": false}')
         buttons=ttk.Frame(tools); buttons.pack(fill="x",pady=(8,0)); ttk.Button(buttons,text="Execute Tool",command=self.execute).pack(side="left"); ttk.Button(buttons,text="Sketch → Extrude Test",command=self.create_test_block).pack(side="left",padx=8); ttk.Button(buttons,text="Complex L-Bracket Test",command=self.create_complex_bracket).pack(side="left",padx=8); ttk.Button(buttons,text="Clear Log",command=self.clear_log).pack(side="right")
         log=ttk.LabelFrame(self.root,text="Live output",padding=8); log.pack(fill="both",expand=True,padx=12,pady=(8,12)); self.output=scrolledtext.ScrolledText(log,wrap=tk.WORD,font=("Consolas",9)); self.output.pack(fill="both",expand=True)
-        self._log("Repository:",str(REPO_ROOT)); self._log("Python:",str(PYTHON_EXE)); self._log("Ready. Offline-safe launcher is recommended."); self._update_mode_controls(); self.mode.trace_add("write",lambda *_:self._update_mode_controls())
+        self._log("Repository:",str(REPO_ROOT)); self._log("Python:",str(PYTHON_EXE)); self._log("Ready. Offline-safe launcher is recommended."); self._log("Ai_Designer assets bound:", ", ".join(item.capability_id for item in CAPABILITIES)); self._update_mode_controls(); self.mode.trace_add("write",lambda *_:self._update_mode_controls())
     def _update_mode_controls(self) -> None:
         semantic=self.mode.get()=="semantic"; self.status_btn.configure(state="normal" if semantic else "disabled"); self.launch_btn.configure(state="normal" if semantic else "disabled")
     def _preset(self,name,args) -> None:
@@ -119,6 +123,8 @@ class SolidAiApp:
         if self.mode.get()!="legacy": self.mode.set("legacy"); self.connect(); self.root.after(900,self.create_complex_bracket); return
         worker=self._connected_worker()
         if worker is None: return
+        require_capability("part.open_new"); require_capability("part.create_sketch"); require_capability("part.extrude_boss"); require_capability("part.hole"); require_capability("edge.fillet")
+        self._log("CAPABILITY CONTRACT", "Ai_Designer mappings for open/sketch/boss/hole/fillet validated.")
         profile=[(-0.06,0.00,0.06,0.00),(0.06,0.00,0.06,0.01),(0.06,0.01,-0.05,0.01),(-0.05,0.01,-0.05,0.07),(-0.05,0.07,-0.06,0.07),(-0.06,0.07,-0.06,0.00)]
         steps=[("ensure_ready",{}),("open_new_part",{}),("create_sketch",{"plane":"Front Plane"})]
         for x1,y1,x2,y2 in profile: steps.append(("add_sketch_entity",{"entity_type":"line","x1":x1,"y1":y1,"x2":x2,"y2":y2}))
