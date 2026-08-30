@@ -14,6 +14,7 @@ retry.
 from __future__ import annotations
 
 import ast
+import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -64,18 +65,37 @@ class RuntimeFailure:
     raw: str
 
 
+def _try_decode_mapping(text: str) -> Mapping[str, Any] | None:
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, Mapping):
+            return parsed
+    except (TypeError, ValueError):
+        pass
+    try:
+        parsed = ast.literal_eval(text)
+        if isinstance(parsed, Mapping):
+            return parsed
+    except (SyntaxError, ValueError):
+        pass
+    return None
+
+
 def normalize_runtime_failure(error: Any) -> RuntimeFailure:
     raw = str(error)
     payload: Mapping[str, Any] = {}
-    matches = re.findall(r"\{.*?\}", raw)
-    for text in reversed(matches):
-        try:
-            parsed = ast.literal_eval(text)
-        except (SyntaxError, ValueError):
-            continue
-        if isinstance(parsed, Mapping):
-            payload = parsed
-            break
+
+    direct = _try_decode_mapping(raw.strip())
+    if direct is not None:
+        payload = direct
+    else:
+        matches = re.findall(r"\{.*?\}", raw)
+        for text in reversed(matches):
+            parsed = _try_decode_mapping(text)
+            if parsed is not None:
+                payload = parsed
+                break
+
     error_payload = payload.get("error", {})
     backend_code = (
         str(error_payload.get("code", ""))
@@ -194,8 +214,6 @@ def _face_score(anchor: Mapping[str, Any], candidate: Mapping[str, Any]) -> floa
             return None
         compared += 1
 
-    # Point/origin is supporting geometric evidence. A planar face may be trimmed,
-    # so area is not treated as identity.
     for key in ("origin", "point"):
         av, cv = _vec(anchor.get(key)), _vec(candidate.get(key))
         if av is not None and cv is not None:
@@ -235,8 +253,6 @@ def _face_score(anchor: Mapping[str, Any], candidate: Mapping[str, Any]) -> floa
     if anchor.get("area") is not None and candidate.get("area") is not None:
         av, cv = float(anchor["area"]), float(candidate["area"])
         tol = 1e-4 * max(1.0, abs(av), abs(cv))
-        # Area is intentionally a soft penalty: trimming/cutting a surviving face
-        # may change its area without changing its geometric identity.
         score += min(abs(av - cv) / tol, 10.0)
         compared += 1
 
