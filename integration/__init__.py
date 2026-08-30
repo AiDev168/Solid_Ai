@@ -30,11 +30,13 @@ from .reference_resolution_v1 import (
     ReferenceEvidence,
     ReferenceIntent,
     ReferenceResolutionError,
+    ReferenceSetBinding,
     edge_evidence,
     edge_indices_json,
     face_evidence,
     face_index_json,
     resolve_reference,
+    resolve_reference_set,
 )
 
 __all__ = [
@@ -48,6 +50,7 @@ __all__ = [
     "ReferenceEvidence",
     "ReferenceIntent",
     "ReferenceResolutionError",
+    "ReferenceSetBinding",
     "TopologyAnchor",
     "TopologyBinding",
     "TopologyRecoveryEvidence",
@@ -68,4 +71,5 @@ __all__ = [
     "rebind_anchor",
     "require_capability",
     "resolve_reference",
+    "resolve_reference_set",
 ]
