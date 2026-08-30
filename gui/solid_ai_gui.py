@@ -50,7 +50,9 @@ class McpWorker:
 
             self.loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self.loop)
-            self.loop.run_until_complete(self._connect(server, ClientSession, StdioServerParameters, stdio_client))
+            self.loop.run_until_complete(
+                self._connect(server, ClientSession, StdioServerParameters, stdio_client)
+            )
             self.ready.set()
             self.emit("CONNECTED", {"mode": self.mode, "server": str(server)})
             self.loop.run_until_complete(self._idle_until_stop())
@@ -111,8 +113,8 @@ class McpWorker:
 class SolidAiApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("Solid AI — SolidPilot Laboratory v0.1")
-        self.root.geometry("1120x780")
+        self.root.title("Solid AI — SolidPilot Laboratory v0.2")
+        self.root.geometry("1120x800")
         self.events: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.worker: McpWorker | None = None
 
@@ -128,7 +130,7 @@ class SolidAiApp:
         top = ttk.Frame(self.root, padding=12)
         top.pack(fill="x")
         ttk.Label(top, text="Solid AI", font=("Segoe UI", 18, "bold")).pack(side="left")
-        ttk.Label(top, text="SolidPilot Laboratory v0.1", font=("Segoe UI", 10)).pack(side="left", padx=10)
+        ttk.Label(top, text="SolidPilot Laboratory v0.2", font=("Segoe UI", 10)).pack(side="left", padx=10)
         ttk.Button(top, text="Connect", command=self.connect).pack(side="right")
         ttk.Button(top, text="Disconnect", command=self.disconnect).pack(side="right", padx=6)
 
@@ -145,8 +147,10 @@ class SolidAiApp:
         row.pack(fill="x")
         ttk.Label(row, text="Tool:").pack(side="left")
         ttk.Entry(row, textvariable=self.tool_name, width=48).pack(side="left", padx=8)
-        ttk.Button(row, text="Status", command=lambda: self._preset("solidworks_status", '{"launch_if_needed": false}')).pack(side="left")
-        ttk.Button(row, text="Launch / verify SW", command=lambda: self._preset("solidworks_status", '{"launch_if_needed": true}')).pack(side="left", padx=6)
+        self.status_btn = ttk.Button(row, text="Status", command=lambda: self._preset("solidworks_status", '{"launch_if_needed": false}'))
+        self.status_btn.pack(side="left")
+        self.launch_btn = ttk.Button(row, text="Launch / verify SW", command=lambda: self._preset("solidworks_status", '{"launch_if_needed": true}'))
+        self.launch_btn.pack(side="left", padx=6)
         ttk.Button(row, text="Pick file", command=self.pick_file).pack(side="right")
 
         ttk.Label(tools, text="Arguments (JSON object)").pack(anchor="w", pady=(10, 4))
@@ -157,7 +161,7 @@ class SolidAiApp:
         buttons = ttk.Frame(tools)
         buttons.pack(fill="x", pady=(8, 0))
         ttk.Button(buttons, text="Execute Tool", command=self.execute).pack(side="left")
-        ttk.Button(buttons, text="Create Test Sketch", command=self.create_test_sketch).pack(side="left", padx=8)
+        ttk.Button(buttons, text="Sketch → Extrude Test", command=self.create_test_block).pack(side="left", padx=8)
         ttk.Button(buttons, text="Clear Log", command=self.clear_log).pack(side="right")
 
         log = ttk.LabelFrame(self.root, text="Live output", padding=8)
@@ -167,7 +171,15 @@ class SolidAiApp:
 
         self._log("Repository:", str(REPO_ROOT))
         self._log("Python:", str(PYTHON_EXE))
-        self._log("Ready.")
+        self._log("Ready. Offline-safe launcher is recommended.")
+        self._update_mode_controls()
+
+        self.mode.trace_add("write", lambda *_: self._update_mode_controls())
+
+    def _update_mode_controls(self) -> None:
+        semantic = self.mode.get() == "semantic"
+        self.status_btn.configure(state="normal" if semantic else "disabled")
+        self.launch_btn.configure(state="normal" if semantic else "disabled")
 
     def _preset(self, name: str, args: str) -> None:
         self.tool_name.set(name)
@@ -220,16 +232,19 @@ class SolidAiApp:
             messagebox.showerror("Arguments", f"Invalid JSON: {exc}")
             return
 
-        async def call() -> Any:
-            return await worker.session.call_tool(self.tool_name.get().strip(), arguments)
+        tool_name = self.tool_name.get().strip()
 
+        async def call() -> Any:
+            return await worker.session.call_tool(tool_name, arguments)
+
+        self._emit("CALL", {"tool": tool_name, "arguments": arguments})
         worker.submit(call)
 
-    def create_test_sketch(self) -> None:
+    def create_test_block(self) -> None:
         if self.mode.get() != "legacy":
             self.mode.set("legacy")
             self.connect()
-            self.root.after(900, self.create_test_sketch)
+            self.root.after(900, self.create_test_block)
             return
         worker = self._connected_worker()
         if worker is None:
@@ -246,6 +261,10 @@ class SolidAiApp:
                 "x2": 0.05,
                 "y2": 0.03,
             }),
+            ("extrude_feature", {
+                "depth": 0.01,
+                "feature_type": "boss",
+            }),
         ]
 
         async def sequence() -> str:
@@ -254,8 +273,8 @@ class SolidAiApp:
                 result = await worker.session.call_tool(name, arguments)
                 self.emit_direct("RESULT", result)
                 if getattr(result, "isError", False):
-                    raise RuntimeError(f"Test sketch sequence failed at tool '{name}'")
-            return "Test sketch sequence completed."
+                    raise RuntimeError(f"Sketch → Extrude test failed at tool '{name}'")
+            return "Sketch → Extrude test completed."
 
         worker.submit(sequence)
 
