@@ -1,14 +1,51 @@
-"""Small, standalone integration layer for proven Ai_Designer CAD assets."""
+"""Standalone integration layer for proven Ai_Designer CAD assets."""
 
-from .aidesigner_assets import CAPABILITIES, CapabilitySpec, describe_capabilities, get_capability, lower_boss, lower_fillet, lower_hole, require_capability
+from .aidesigner_assets import (
+    CAPABILITIES,
+    CapabilitySpec,
+    describe_capabilities,
+    get_capability,
+    lower_boss,
+    lower_fillet,
+    lower_hole,
+    require_capability,
+)
+from .recovery_assets import (
+    FailureDiagnosis,
+    RecoveryAssets,
+    RecoveryController,
+    RecoveryRegistry,
+    TopologyAnchor,
+    TopologyBinding,
+    TopologyRecoveryEvidence,
+    TopologyRecoveryResult,
+    TopologyRecoverySolver,
+    diagnose_failure,
+    make_anchor,
+    normalize_runtime_failure,
+    rebind_anchor,
+)
 
 __all__ = [
     "CAPABILITIES",
     "CapabilitySpec",
+    "FailureDiagnosis",
+    "RecoveryAssets",
+    "RecoveryController",
+    "RecoveryRegistry",
+    "TopologyAnchor",
+    "TopologyBinding",
+    "TopologyRecoveryEvidence",
+    "TopologyRecoveryResult",
+    "TopologyRecoverySolver",
     "describe_capabilities",
+    "diagnose_failure",
     "get_capability",
     "lower_boss",
     "lower_fillet",
     "lower_hole",
+    "make_anchor",
+    "normalize_runtime_failure",
+    "rebind_anchor",
     "require_capability",
 ]
