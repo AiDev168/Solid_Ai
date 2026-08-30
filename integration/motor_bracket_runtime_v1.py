@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol
 
 from .aidesigner_assets import lower_boss, lower_fillet
 from .motor_bracket_plan_v1 import FeatureSpec, MotorBracketPlanV1, MOTOR_BRACKET_V1, ordered_features
 from .recovery_assets import RecoveryAssets, TopologyRecoveryEvidence, make_anchor, normalize_runtime_failure
 from .reference_resolution_v1 import (
     ReferenceIntent,
-    ReferenceSetBinding,
     edge_evidence,
     edge_indices_json,
     face_evidence,
@@ -82,17 +81,18 @@ def _ensure_status(result: Any, tool: str) -> None:
         raise RuntimeError(f"{tool}: unexpected status {result.get('status')!r}: {result}")
 
 
-def _reference_from_plan(raw: dict[str, Any]) -> ReferenceIntent:
+def _reference_from_plan(raw: Mapping[str, Any]) -> ReferenceIntent:
     return ReferenceIntent(
         reference_id=str(raw["reference_id"]),
         kind=str(raw["kind"]),
         role=str(raw["role"]),
         feature_id=str(raw.get("feature_id", "")),
+        criteria=raw.get("criteria"),
     )
 
 
 class MotorBracketRuntimeV1:
-    """Execute the semantic plan through one shared reference/evidence lifecycle."""
+    """Execute semantic features through one shared evidence/reference/recovery lifecycle."""
 
     def __init__(self, session: RuntimeSession, plan: MotorBracketPlanV1 = MOTOR_BRACKET_V1):
         self.session = session
@@ -105,21 +105,15 @@ class MotorBracketRuntimeV1:
         self.report.evidence.append(ExecutionEvidence(feature_id, tool, _state_version(result), result))
         return result
 
-    async def _resolve_face(self, raw_reference: dict[str, Any]):
+    async def _resolve_face(self, raw_reference: Mapping[str, Any]):
         analysis = await _call(self.session, "analyze_model", {"analysis_type": "faces"})
         evidence = face_evidence(analysis, int(analysis.get("state_version", 0)))
-        binding = resolve_reference(_reference_from_plan(raw_reference), evidence)
-        return binding
+        return resolve_reference(_reference_from_plan(raw_reference), evidence)
 
-    async def _resolve_outer_edges(self):
+    async def _resolve_outer_edges(self, raw_reference: Mapping[str, Any]):
         analysis = await _call(self.session, "analyze_model", {"analysis_type": "edges"})
         evidence = edge_evidence(analysis, int(analysis.get("state_version", 0)))
-        intent = ReferenceIntent(
-            reference_id="outer_vertical_edges_for_fillet",
-            kind="edge",
-            role="all_outer_vertical",
-        )
-        return resolve_reference_set(intent, evidence)
+        return resolve_reference_set(_reference_from_plan(raw_reference), evidence)
 
     async def _profile(self, feature: FeatureSpec) -> None:
         p = feature.params
@@ -168,9 +162,12 @@ class MotorBracketRuntimeV1:
         self.report.feature_status[feature.feature_id] = "COMPLETED"
 
     async def _fillet(self, feature: FeatureSpec) -> None:
-        edge_binding = await self._resolve_outer_edges()
+        raw_reference = feature.params["selection"]["reference"]
+        edge_binding = await self._resolve_outer_edges(raw_reference)
+        edge_indices = edge_indices_json(edge_binding)
+        before_indices = json.loads(edge_indices)
         try:
-            call = lower_fillet(radius_m=float(feature.params["radius_m"]), edge_indices=edge_indices_json(edge_binding))
+            call = lower_fillet(radius_m=float(feature.params["radius_m"]), edge_indices=edge_indices)
             await self._record(feature.feature_id, call["tool"], await _call(self.session, call["tool"], call["params"]))
             self.report.feature_status[feature.feature_id] = "COMPLETED"
             return
