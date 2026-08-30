@@ -22,6 +22,8 @@ jobs:
       - name: Fetch complete q3ds-solidworks-mcp source
         run: |
           set -eux
+          git fetch origin main
+          git rebase origin/main
           rm -rf /tmp/q3ds
           git clone --depth 1 https://github.com/zarcherlot/q3ds-solidworks-mcp.git /tmp/q3ds
           rm -rf /tmp/q3ds/.git
