@@ -21,6 +21,8 @@ class MotorBracketPlanV1:
     features: tuple[FeatureSpec, ...]
 
 
+_BASE_BOUNDS_M = (-0.06, 0.06, -0.04, 0.04)
+
 MOTOR_BRACKET_V1 = MotorBracketPlanV1(
     schema="solid-ai.motor-bracket.v1",
     part_id="motor_bracket_v1",
@@ -100,6 +102,12 @@ MOTOR_BRACKET_V1 = MotorBracketPlanV1(
                 "selection": {
                     "semantic_role": "outer_vertical_edges",
                     "strategy": "fresh_topology_evidence",
+                    "reference": {
+                        "reference_id": "outer_vertical_edges_for_fillet",
+                        "kind": "edge",
+                        "role": "all_outer_vertical",
+                        "criteria": {"outer_bounds_m": _BASE_BOUNDS_M},
+                    },
                 },
             },
         ),
@@ -107,9 +115,7 @@ MOTOR_BRACKET_V1 = MotorBracketPlanV1(
 )
 
 
-def ordered_features(
-    plan: MotorBracketPlanV1 = MOTOR_BRACKET_V1,
-) -> tuple[FeatureSpec, ...]:
+def ordered_features(plan: MotorBracketPlanV1 = MOTOR_BRACKET_V1) -> tuple[FeatureSpec, ...]:
     remaining = {feature.feature_id: feature for feature in plan.features}
     ordered: list[FeatureSpec] = []
     while remaining:
