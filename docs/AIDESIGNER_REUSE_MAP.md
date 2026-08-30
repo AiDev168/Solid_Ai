@@ -2,99 +2,92 @@
 
 ## Scope
 
-`Solid_Ai` reuses only evidence-backed parts of `Ai_Designer`. The old application's COM bridge and execution compiler are not duplicated; SolidPilot remains the CAD execution backend. The old broad planner/agent stack is not imported wholesale.
+`Solid_Ai` reuses evidence-backed parts of `Ai_Designer`. SolidPilot remains the CAD execution backend. The old application's COM bridge and execution compiler are not duplicated, and the old broad planner/agent stack is not imported wholesale.
 
 ## Ported assets
 
 ### Capability metadata and lowering
 
-`integration/aidesigner_assets.py` preserves the useful capability-to-tool mapping and lowering idea:
-
-- `part.open_new` → `open_new_part`
-- `part.create_sketch` → `create_sketch`
-- `sketch.circle` → `add_sketch_entity`
-- `part.extrude_boss` → `extrude_feature`
-- `model.analyze_geometry` → `analyze_model`
-- `part.hole` → circle sketch + `extrude_feature(cut, through)`
-- `edge.fillet` → `add_edge_feature`
-
-Fillet lowering prefers `edge_indices` over coordinate selection.
+`integration/aidesigner_assets.py` preserves capability-to-tool mappings and lowering helpers for the proven SolidPilot surface.
 
 ### Recovery and solver assets
 
-`integration/recovery_assets.py` is a standalone extraction of the useful deterministic recovery architecture from `Ai_Designer`:
+`integration/recovery_assets.py` preserves the deterministic recovery architecture:
 
 - structured failure diagnosis with fail-closed unknown codes;
-- bounded `RecoveryRegistry` + `RecoveryController`;
+- bounded recovery registry/controller;
 - runtime failure normalization for topology/reference families;
 - topology anchors and geometry-backed rebinding across topology mutations;
 - `TopologyRecoverySolver` registered as `topology-rebinding-v1`;
-- explicit recovery evidence carrying source/target state versions.
+- source/target state-version evidence.
 
-The implementation is independent from the old LLM, agent swarm, CAD-IR compiler, and SolidPilot client classes. It can therefore be used with the current MCP `ClientSession` surface.
+### Planning assets
 
-### Live proof
+`integration/motor_bracket_plan_v1.py` is a standalone semantic multi-feature plan derived from the proven intent/planning direction in Ai_Designer M5. It captures dependencies for a 120 x 80 x 10 mm motor-mounting bracket, four M8 through holes, two reinforcing ribs and R5 outer fillets.
 
-`scripts/run_topology_recovery_demo.py` uses the imported recovery assets against the real q3ds legacy MCP server. It:
+The dependency order is:
 
-```text
-live SolidPilot part
-  ↓
-capture real edge anchor
-  ↓
-mutate topology with a hole cut
-  ↓
-analyze fresh edges
-  ↓
-TopologyRecoverySolver rebinding
-  ↓
-use recovered backend edge index
-  ↓
-fillet
-```
+~~~text
+base_profile → base → mounting_holes → rib_left/rib_right → outer_fillets
+~~~
 
-This proves the important recovery behavior: an old backend index is not blindly reused; fresh geometry evidence is used to recover the current selector.
+The plan is intentionally independent of the old CAD-IR/compiler runtime. It is a semantic source for a future SolidPilot execution planner.
 
-## Deliberately deferred assets
+## Live recovery proof
 
-The following `Ai_Designer` components were inspected but are not copied wholesale:
+Successful live proof on 2026-08-30:
 
-- `ExecutionRepairAgent` and the agentic recovery coordinator: their contract is valuable, but their implementation depends on the old LLM + EngineeringIntent + CAD-IR stack. We will implement an equivalent seam around the current SolidPilot tools only after deterministic recovery is stable.
-- broad planner/intent/extractor layers: these coupled reasoning, compilation, and provider behavior too tightly for the new SolidPilot laboratory.
+~~~text
+Part13
+source edge index = 4
+source state_version = 9
+topology mutation
+target edge index = 6
+target state_version = 12
+distance = 0.0
+Fillet1 = COMPLETED
+~~~
 
-The architectural direction is the useful part: SolidPilot owns CAD execution/evidence; the higher layer owns engineering reasoning, diagnosis, solver selection, recovery, retry, and verification. This is recorded in `Ai_Designer/docs/CAD_RECOVERY_ORCHESTRATION_V1.md`.
+This establishes that a backend topology index is treated as a temporary selector. After mutation, fresh evidence can recover the corresponding current selector and the downstream Fillet can complete.
+
+## Design lessons captured
+
+1. Primitive CAD execution and engineering reasoning are separate layers.
+2. Topology-sensitive features must resolve references from fresh runtime evidence.
+3. Backend indices must not be promoted to semantic identity.
+4. Recovery must be bounded, deterministic and fail-closed.
+5. Multi-feature planning should be represented as a dependency graph rather than a hand-written linear script.
+
+## Deferred assets
+
+`ExecutionRepairAgent`, the old generic LLM gateway, broad EngineeringIntent extraction and the complete old CAD-IR planner are not copied wholesale. Their contracts remain useful, but their concrete runtime is coupled to the old application.
+
+The next integration milestone is to add a current-runtime execution planner that consumes the semantic motor-bracket plan, lowers features to proven SolidPilot calls, captures runtime references, verifies each mutation, and invokes bounded recovery only for classified failures.
 
 ## Verification
 
-Pure Python:
-
-```powershell
+~~~powershell
 python scripts\verify_aidesigner_assets.py
+python scripts\verify_motor_bracket_plan.py
 python -m pytest -q tests/test_recovery_assets.py tests/test_topology_selection.py
-```
+~~~
 
 Live recovery proof:
 
-```powershell
+~~~powershell
 vendor\q3ds-solidworks-mcp\.venv\Scripts\python.exe scripts\run_topology_recovery_demo.py
-```
-
-The live proof uses the local MCP/CAD path.
+~~~
 
 ## Provenance
 
-Source inspected from `AiDev168/Ai_Designer` on 2026-08-30:
+Source inspected from `AiDev168/Ai_Designer` on 2026-08-30 includes:
 
-- `src/ai_designer/recovery/controller.py`
-- `src/ai_designer/recovery/diagnosis.py`
-- `src/ai_designer/recovery/registry.py`
-- `src/ai_designer/recovery/runtime_failure_v1.py`
-- `src/ai_designer/recovery/topology_solver.py`
-- `src/ai_designer/solidpilot/topology_rebinding_v1.py`
-- `src/ai_designer/solidpilot/topology_evidence_v1.py`
-- `src/ai_designer/solidpilot/proven_sequences.py`
-- `src/ai_designer/execution/runtime_executor.py`
-- `src/ai_designer/planning/execution_repair.py`
-- `docs/CAD_RECOVERY_ORCHESTRATION_V1.md`
+- recovery controller/diagnosis/registry/runtime failure/topology solver;
+- topology evidence and stable-reference contracts;
+- multi-feature planning and executable-plan concepts;
+- M4 real failure recovery runbook;
+- M5 motor-bracket-class engineering proof runbook;
+- SolidPilot convergence and topology mutation tests;
+- CAD recovery orchestration architecture.
 
 The implementation in `Solid_Ai` is deliberately standalone so it cannot pull the old application's runtime dependency graph into the new repository.
