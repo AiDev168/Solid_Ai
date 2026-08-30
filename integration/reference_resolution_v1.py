@@ -47,10 +47,7 @@ class ReferenceSetBinding:
 
 def _xyz(value: Any) -> tuple[float, float, float] | None:
     if isinstance(value, Mapping):
-        if all(
-            isinstance(value.get(k), (int, float)) and not isinstance(value.get(k), bool)
-            for k in ("x", "y", "z")
-        ):
+        if all(isinstance(value.get(k), (int, float)) and not isinstance(value.get(k), bool) for k in ("x", "y", "z")):
             return float(value["x"]), float(value["y"]), float(value["z"])
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) and len(value) >= 3:
         if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value[:3]):
@@ -96,9 +93,7 @@ def _walk(value: Any, key: str) -> list[Mapping[str, Any]]:
     return []
 
 
-def _normalize_candidates(
-    raw: Sequence[Mapping[str, Any]], kind: str, state_version: int
-) -> ReferenceEvidence:
+def _normalize_candidates(raw: Sequence[Mapping[str, Any]], kind: str, state_version: int) -> ReferenceEvidence:
     candidates: list[Mapping[str, Any]] = []
     seen: set[int] = set()
     for item in raw:
@@ -109,18 +104,12 @@ def _normalize_candidates(
         original_kind = normalized.get("kind")
         normalized["backend_index"] = idx
         normalized["kind"] = kind
-        if (
-            kind == "face"
-            and "surface_kind" not in normalized
-            and original_kind not in {None, "face"}
-        ):
+        if kind == "face" and "surface_kind" not in normalized and original_kind not in {None, "face"}:
             normalized["surface_kind"] = str(original_kind)
         candidates.append(normalized)
         seen.add(idx)
     if not candidates:
-        raise ReferenceResolutionError(
-            f"SolidPilot {kind} analysis contained no indexed {kind}s"
-        )
+        raise ReferenceResolutionError(f"SolidPilot {kind} analysis contained no indexed {kind}s")
     return ReferenceEvidence(kind, tuple(candidates), state_version)
 
 
@@ -133,13 +122,6 @@ def edge_evidence(result: Mapping[str, Any], state_version: int) -> ReferenceEvi
 
 
 def _canonical_evidence(evidence: ReferenceEvidence) -> ReferenceEvidence:
-    """Normalize direct ReferenceEvidence as well as adapter-produced evidence.
-
-    Tests and higher layers may construct ReferenceEvidence directly from a backend
-    payload. The resolver is the authority boundary, so every candidate entering the
-    scoring path must have one canonical backend_index field regardless of whether the
-    source called it `i`, `index`, or `backend_index`.
-    """
     return _normalize_candidates(evidence.candidates, evidence.kind, evidence.state_version)
 
 
@@ -148,60 +130,55 @@ def _score_face(intent: ReferenceIntent, candidate: Mapping[str, Any]) -> float 
         return None
     if candidate.get("planar") is False:
         return None
-    if (
-        candidate.get("surface_kind")
-        not in {None, "plane", "planar", "planarface", "plane_surface"}
-        and _normal(candidate) is None
-    ):
-        return None
     normal = _unit(_normal(candidate) or ())
-    if intent.role == "top_planar":
-        if normal is not None and normal[2] < 0.999999:
-            return None
-        point = _point(candidate)
-        return -point[2] if point is not None else 0.0
-    point = _point(candidate)
-    if point is None or intent.target_xyz is None:
+    if intent.role == "top_planar" and normal is not None and normal[2] < 0.999999:
         return None
-    if normal is not None and abs(normal[2]) < 0.999999:
+    if intent.role == "planar_at_point" and normal is not None and abs(normal[2]) < 0.999999:
+        return None
+    if candidate.get("surface_kind") not in {None, "plane", "planar", "planarface", "plane_surface"} and normal is None:
+        return None
+    point = _point(candidate)
+    if intent.role == "top_planar":
+        return -point[2] if point is not None else 0.0
+    if point is None or intent.target_xyz is None:
         return None
     return math.dist(point, intent.target_xyz)
 
 
-def _in_bounds(
-    point: tuple[float, float, float],
-    bounds: Sequence[float] | None,
-    tolerance: float = 1e-8,
-) -> bool:
-    if not bounds or len(bounds) != 4:
-        return True
-    xmin, xmax, ymin, ymax = map(float, bounds)
-    return (
-        xmin - tolerance <= point[0] <= xmax + tolerance
-        and ymin - tolerance <= point[1] <= ymax + tolerance
-    )
+def _bounds(point: tuple[float, float, float], raw: Sequence[float] | None) -> tuple[float, float, float, float] | None:
+    if raw is None or len(raw) != 4:
+        return None
+    xmin, xmax, ymin, ymax = map(float, raw)
+    return xmin, xmax, ymin, ymax
 
 
 def _score_edge(intent: ReferenceIntent, candidate: Mapping[str, Any]) -> float | None:
-    start = _xyz(candidate.get("start"))
-    end = _xyz(candidate.get("end"))
+    start, end = _xyz(candidate.get("start")), _xyz(candidate.get("end"))
     if start is None or end is None:
         return None
-    dx = abs(end[0] - start[0])
-    dy = abs(end[1] - start[1])
-    dz = abs(end[2] - start[2])
+    dx, dy, dz = abs(end[0] - start[0]), abs(end[1] - start[1]), abs(end[2] - start[2])
     if intent.role in {"outer_vertical", "all_outer_vertical"}:
         if dz <= max(dx, dy) or dz <= 1e-9:
             return None
         midpoint = _point(candidate)
-        if midpoint is None or not _in_bounds(
-            midpoint, (intent.criteria or {}).get("outer_bounds_m")
-        ):
+        if midpoint is None:
+            return None
+        raw_bounds = (intent.criteria or {}).get("outer_bounds_m")
+        b = _bounds(midpoint, raw_bounds)
+        if b is None:
+            return None
+        xmin, xmax, ymin, ymax = b
+        tol = float((intent.criteria or {}).get("boundary_tolerance_m", 1e-7))
+        on_boundary = (
+            abs(midpoint[0] - xmin) <= tol
+            or abs(midpoint[0] - xmax) <= tol
+            or abs(midpoint[1] - ymin) <= tol
+            or abs(midpoint[1] - ymax) <= tol
+        )
+        if not on_boundary:
             return None
         if intent.role == "outer_vertical":
-            if intent.target_xyz is None:
-                return 0.0
-            return math.dist(midpoint, intent.target_xyz)
+            return math.dist(midpoint, intent.target_xyz) if intent.target_xyz is not None else 0.0
         return 0.0
     if intent.role == "nearest":
         point = _point(candidate)
@@ -213,82 +190,40 @@ def _score_edge(intent: ReferenceIntent, candidate: Mapping[str, Any]) -> float 
 
 def resolve_reference(intent: ReferenceIntent, evidence: ReferenceEvidence) -> ReferenceBinding:
     if intent.role == "all_outer_vertical":
-        raise ReferenceResolutionError(
-            "all_outer_vertical is set-valued; use resolve_reference_set"
-        )
+        raise ReferenceResolutionError("all_outer_vertical is set-valued; use resolve_reference_set")
     if intent.kind != evidence.kind:
-        raise ReferenceResolutionError(
-            f"reference kind mismatch: requested {intent.kind}, evidence {evidence.kind}"
-        )
-
+        raise ReferenceResolutionError(f"reference kind mismatch: requested {intent.kind}, evidence {evidence.kind}")
     canonical = _canonical_evidence(evidence)
     scored: list[tuple[float, Mapping[str, Any]]] = []
     for candidate in canonical.candidates:
-        score = (
-            _score_face(intent, candidate)
-            if canonical.kind == "face"
-            else _score_edge(intent, candidate)
-        )
+        score = _score_face(intent, candidate) if canonical.kind == "face" else _score_edge(intent, candidate)
         if score is not None:
             scored.append((score, candidate))
     if not scored:
-        raise ReferenceResolutionError(
-            f"no candidate satisfies reference role={intent.role} kind={intent.kind}"
-        )
+        raise ReferenceResolutionError(f"no candidate satisfies reference role={intent.role} kind={intent.kind}")
     scored.sort(key=lambda item: (item[0], int(item[1]["backend_index"])))
     best_score, best = scored[0]
     if len(scored) > 1 and abs(scored[1][0] - best_score) <= 1e-9:
-        raise ReferenceResolutionError(
-            f"ambiguous reference {intent.reference_id}: multiple candidates have equal score"
-        )
-    return ReferenceBinding(
-        intent.reference_id,
-        canonical.kind,
-        int(best["backend_index"]),
-        canonical.state_version,
-        dict(best),
-        best_score,
-    )
+        raise ReferenceResolutionError(f"ambiguous reference {intent.reference_id}: multiple candidates have equal score")
+    return ReferenceBinding(intent.reference_id, canonical.kind, int(best["backend_index"]), canonical.state_version, dict(best), best_score)
 
 
-def resolve_reference_set(
-    intent: ReferenceIntent, evidence: ReferenceEvidence
-) -> ReferenceSetBinding:
+def resolve_reference_set(intent: ReferenceIntent, evidence: ReferenceEvidence) -> ReferenceSetBinding:
     if intent.kind != evidence.kind:
-        raise ReferenceResolutionError(
-            f"reference kind mismatch: requested {intent.kind}, evidence {evidence.kind}"
-        )
+        raise ReferenceResolutionError(f"reference kind mismatch: requested {intent.kind}, evidence {evidence.kind}")
     canonical = _canonical_evidence(evidence)
     scored: list[tuple[float, Mapping[str, Any]]] = []
     for candidate in canonical.candidates:
-        score = (
-            _score_face(intent, candidate)
-            if canonical.kind == "face"
-            else _score_edge(intent, candidate)
-        )
+        score = _score_face(intent, candidate) if canonical.kind == "face" else _score_edge(intent, candidate)
         if score is not None:
             scored.append((score, candidate))
     if not scored:
-        raise ReferenceResolutionError(
-            f"no candidates satisfy reference role={intent.role} kind={intent.kind}"
-        )
+        raise ReferenceResolutionError(f"no candidates satisfy reference role={intent.role} kind={intent.kind}")
     scored.sort(key=lambda item: int(item[1]["backend_index"]))
-    return ReferenceSetBinding(
-        intent.reference_id,
-        canonical.kind,
-        tuple(
-            ReferenceBinding(
-                intent.reference_id,
-                canonical.kind,
-                int(candidate["backend_index"]),
-                canonical.state_version,
-                dict(candidate),
-                score,
-            )
-            for score, candidate in scored
-        ),
-        canonical.state_version,
-    )
+    return ReferenceSetBinding(intent.reference_id, canonical.kind, tuple(
+        ReferenceBinding(intent.reference_id, canonical.kind, int(candidate["backend_index"]), canonical.state_version, dict(candidate), score)
+        for score, candidate in scored
+    ), canonical.state_version)
 
 
 def face_index_json(binding: ReferenceBinding) -> int:
@@ -310,15 +245,7 @@ def edge_indices_json(binding: ReferenceBinding | ReferenceSetBinding) -> str:
 
 
 __all__ = [
-    "ReferenceBinding",
-    "ReferenceEvidence",
-    "ReferenceIntent",
-    "ReferenceResolutionError",
-    "ReferenceSetBinding",
-    "edge_evidence",
-    "edge_indices_json",
-    "face_evidence",
-    "face_index_json",
-    "resolve_reference",
-    "resolve_reference_set",
+    "ReferenceBinding", "ReferenceEvidence", "ReferenceIntent", "ReferenceResolutionError",
+    "ReferenceSetBinding", "edge_evidence", "edge_indices_json", "face_evidence", "face_index_json",
+    "resolve_reference", "resolve_reference_set",
 ]
