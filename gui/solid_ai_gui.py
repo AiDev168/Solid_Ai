@@ -4,16 +4,11 @@ import asyncio
 import json
 import os
 import queue
-import subprocess
-import sys
 import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 from typing import Any
-
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1] / "vendor" / "q3ds-solidworks-mcp"
@@ -23,7 +18,7 @@ LEGACY_SERVER = REPO_ROOT / "adapters" / "claude" / "legacy_server.py"
 
 
 class McpWorker:
-    """Own one persistent MCP stdio session on a background asyncio loop."""
+    """Persistent MCP stdio client on a dedicated asyncio event loop."""
 
     def __init__(self, mode: str, emit) -> None:
         self.mode = mode
@@ -32,9 +27,9 @@ class McpWorker:
         self.ready = threading.Event()
         self.stop = threading.Event()
         self.loop: asyncio.AbstractEventLoop | None = None
-        self.session: ClientSession | None = None
-        self._stdio_cm = None
-        self._session_cm = None
+        self.session: Any = None
+        self._stdio_cm: Any = None
+        self._session_cm: Any = None
         self.last_error: str | None = None
 
     def start(self) -> None:
@@ -50,13 +45,16 @@ class McpWorker:
 
     def _thread_main(self, server: Path) -> None:
         try:
+            from mcp import ClientSession, StdioServerParameters
+            from mcp.client.stdio import stdio_client
+
             self.loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self.loop)
-            self.loop.run_until_complete(self._connect(server))
+            self.loop.run_until_complete(self._connect(server, ClientSession, StdioServerParameters, stdio_client))
             self.ready.set()
             self.emit("CONNECTED", {"mode": self.mode, "server": str(server)})
             self.loop.run_until_complete(self._idle_until_stop())
-        except Exception as exc:  # pragma: no cover - exercised by local host integration
+        except Exception as exc:
             self.last_error = f"{type(exc).__name__}: {exc}"
             self.ready.set()
             self.emit("ERROR", self.last_error)
@@ -64,14 +62,13 @@ class McpWorker:
             if self.loop and not self.loop.is_closed():
                 self.loop.close()
 
-    async def _connect(self, server: Path) -> None:
+    async def _connect(self, server: Path, ClientSession, StdioServerParameters, stdio_client) -> None:
         env = os.environ.copy()
         env["PYTHONUTF8"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONPATH"] = os.pathsep.join(
             [str(REPO_ROOT), str(REPO_ROOT / "adapters" / "claude"), env.get("PYTHONPATH", "")]
         ).strip(os.pathsep)
-
         params = StdioServerParameters(
             command=str(PYTHON_EXE),
             args=[str(server)],
@@ -87,34 +84,21 @@ class McpWorker:
     async def _idle_until_stop(self) -> None:
         while not self.stop.is_set():
             await asyncio.sleep(0.05)
-        await self._close()
-
-    async def _close(self) -> None:
         if self._session_cm is not None:
             await self._session_cm.__aexit__(None, None, None)
-            self._session_cm = None
-            self.session = None
         if self._stdio_cm is not None:
             await self._stdio_cm.__aexit__(None, None, None)
-            self._stdio_cm = None
+        self.session = None
 
-    def call(self, tool_name: str, arguments: dict[str, Any]) -> None:
-        if not self.loop or not self.session or not self.ready.is_set():
+    def submit(self, coro_factory) -> None:
+        if not self.loop or self.session is None or not self.ready.is_set():
             raise RuntimeError("MCP session is not connected")
-        future = asyncio.run_coroutine_threadsafe(
-            self._call_tool(tool_name, arguments), self.loop
-        )
-        future.add_done_callback(self._finish_call)
+        future = asyncio.run_coroutine_threadsafe(coro_factory(), self.loop)
+        future.add_done_callback(self._finish)
 
-    async def _call_tool(self, tool_name: str, arguments: dict[str, Any]) -> Any:
-        self.emit("CALL", {"tool": tool_name, "arguments": arguments})
-        result = await self.session.call_tool(tool_name, arguments)
-        return result
-
-    def _finish_call(self, future) -> None:
+    def _finish(self, future) -> None:
         try:
-            result = future.result()
-            self.emit("RESULT", result)
+            self.emit("RESULT", future.result())
         except Exception as exc:
             self.emit("ERROR", f"{type(exc).__name__}: {exc}")
 
@@ -143,50 +127,47 @@ class SolidAiApp:
     def _build_ui(self) -> None:
         top = ttk.Frame(self.root, padding=12)
         top.pack(fill="x")
-
         ttk.Label(top, text="Solid AI", font=("Segoe UI", 18, "bold")).pack(side="left")
         ttk.Label(top, text="SolidPilot Laboratory v0.1", font=("Segoe UI", 10)).pack(side="left", padx=10)
-
         ttk.Button(top, text="Connect", command=self.connect).pack(side="right")
         ttk.Button(top, text="Disconnect", command=self.disconnect).pack(side="right", padx=6)
 
-        mode_frame = ttk.LabelFrame(self.root, text="MCP surface", padding=10)
-        mode_frame.pack(fill="x", padx=12, pady=(0, 8))
-        ttk.Radiobutton(mode_frame, text="Semantic (default)", value="semantic", variable=self.mode).pack(side="left")
-        ttk.Radiobutton(mode_frame, text="Legacy CAD tools (development)", value="legacy", variable=self.mode).pack(side="left", padx=20)
-        ttk.Label(mode_frame, text="Status:").pack(side="left", padx=(30, 4))
-        ttk.Label(mode_frame, textvariable=self.status).pack(side="left")
+        mode = ttk.LabelFrame(self.root, text="MCP surface", padding=10)
+        mode.pack(fill="x", padx=12, pady=(0, 8))
+        ttk.Radiobutton(mode, text="Semantic (current)", value="semantic", variable=self.mode).pack(side="left")
+        ttk.Radiobutton(mode, text="Legacy CAD tools (development)", value="legacy", variable=self.mode).pack(side="left", padx=20)
+        ttk.Label(mode, text="Status:").pack(side="left", padx=(30, 4))
+        ttk.Label(mode, textvariable=self.status).pack(side="left")
 
-        prompt_frame = ttk.LabelFrame(self.root, text="Tool call", padding=10)
-        prompt_frame.pack(fill="x", padx=12, pady=8)
-
-        row = ttk.Frame(prompt_frame)
+        tools = ttk.LabelFrame(self.root, text="Tool call laboratory", padding=10)
+        tools.pack(fill="x", padx=12, pady=8)
+        row = ttk.Frame(tools)
         row.pack(fill="x")
         ttk.Label(row, text="Tool:").pack(side="left")
         ttk.Entry(row, textvariable=self.tool_name, width=48).pack(side="left", padx=8)
-        ttk.Button(row, text="Use status", command=lambda: self._preset("solidworks_status", '{"launch_if_needed": false}')).pack(side="left")
-        ttk.Button(row, text="Connect + launch", command=lambda: self._preset("solidworks_status", '{"launch_if_needed": true}')).pack(side="left", padx=6)
+        ttk.Button(row, text="Status", command=lambda: self._preset("solidworks_status", '{"launch_if_needed": false}')).pack(side="left")
+        ttk.Button(row, text="Launch / verify SW", command=lambda: self._preset("solidworks_status", '{"launch_if_needed": true}')).pack(side="left", padx=6)
         ttk.Button(row, text="Pick file", command=self.pick_file).pack(side="right")
 
-        ttk.Label(prompt_frame, text="Arguments (JSON object)").pack(anchor="w", pady=(10, 4))
-        self.args = scrolledtext.ScrolledText(prompt_frame, height=7, wrap=tk.WORD, font=("Consolas", 10))
+        ttk.Label(tools, text="Arguments (JSON object)").pack(anchor="w", pady=(10, 4))
+        self.args = scrolledtext.ScrolledText(tools, height=7, wrap=tk.WORD, font=("Consolas", 10))
         self.args.pack(fill="x")
         self.args.insert("1.0", '{"launch_if_needed": false}')
 
-        action_row = ttk.Frame(prompt_frame)
-        action_row.pack(fill="x", pady=(8, 0))
-        ttk.Button(action_row, text="Execute Tool", command=self.execute).pack(side="left")
-        ttk.Button(action_row, text="Create Test Sketch", command=self.create_test_sketch).pack(side="left", padx=8)
-        ttk.Button(action_row, text="Clear Log", command=self.clear_log).pack(side="right")
+        buttons = ttk.Frame(tools)
+        buttons.pack(fill="x", pady=(8, 0))
+        ttk.Button(buttons, text="Execute Tool", command=self.execute).pack(side="left")
+        ttk.Button(buttons, text="Create Test Sketch", command=self.create_test_sketch).pack(side="left", padx=8)
+        ttk.Button(buttons, text="Clear Log", command=self.clear_log).pack(side="right")
 
-        log_frame = ttk.LabelFrame(self.root, text="Live output", padding=8)
-        log_frame.pack(fill="both", expand=True, padx=12, pady=(8, 12))
-        self.output = scrolledtext.ScrolledText(log_frame, wrap=tk.WORD, font=("Consolas", 9))
+        log = ttk.LabelFrame(self.root, text="Live output", padding=8)
+        log.pack(fill="both", expand=True, padx=12, pady=(8, 12))
+        self.output = scrolledtext.ScrolledText(log, wrap=tk.WORD, font=("Consolas", 9))
         self.output.pack(fill="both", expand=True)
 
         self._log("Repository:", str(REPO_ROOT))
         self._log("Python:", str(PYTHON_EXE))
-        self._log("Ready. Connect, then execute a real SolidPilot tool.")
+        self._log("Ready.")
 
     def _preset(self, name: str, args: str) -> None:
         self.tool_name.set(name)
@@ -200,8 +181,8 @@ class SolidAiApp:
             self.args.insert("1.0", json.dumps({"file_path": path}, ensure_ascii=False, indent=2))
 
     def connect(self) -> None:
+        self.disconnect()
         try:
-            self.disconnect()
             self.status.set("Connecting...")
             self.worker = McpWorker(self.mode.get(), self._emit)
             self.worker.start()
@@ -215,12 +196,21 @@ class SolidAiApp:
             self.worker = None
         self.status.set("Disconnected")
 
-    def execute(self) -> None:
-        if not self.worker or not self.worker.ready.wait(timeout=0.2):
+    def _connected_worker(self) -> McpWorker | None:
+        if not self.worker:
             messagebox.showwarning("SolidPilot", "Connect to an MCP surface first.")
-            return
+            return None
+        if not self.worker.ready.wait(timeout=0.2):
+            messagebox.showwarning("SolidPilot", "MCP connection is still starting.")
+            return None
         if self.worker.last_error:
             messagebox.showerror("SolidPilot", self.worker.last_error)
+            return None
+        return self.worker
+
+    def execute(self) -> None:
+        worker = self._connected_worker()
+        if worker is None:
             return
         try:
             arguments = json.loads(self.args.get("1.0", tk.END).strip() or "{}")
@@ -229,68 +219,48 @@ class SolidAiApp:
         except Exception as exc:
             messagebox.showerror("Arguments", f"Invalid JSON: {exc}")
             return
-        try:
-            self.worker.call(self.tool_name.get().strip(), arguments)
-        except Exception as exc:
-            self._emit("ERROR", f"{type(exc).__name__}: {exc}")
+
+        async def call() -> Any:
+            return await worker.session.call_tool(self.tool_name.get().strip(), arguments)
+
+        worker.submit(call)
 
     def create_test_sketch(self) -> None:
-        """Run a small, real legacy CAD sequence; no custom COM code is used here."""
         if self.mode.get() != "legacy":
             self.mode.set("legacy")
             self.connect()
-            self.root.after(700, self.create_test_sketch)
+            self.root.after(900, self.create_test_sketch)
             return
-        if not self.worker or not self.worker.ready.wait(timeout=0.2) or self.worker.last_error:
-            messagebox.showwarning("SolidPilot", "Legacy CAD surface is not connected.")
+        worker = self._connected_worker()
+        if worker is None:
             return
 
-        def run_sequence() -> None:
-            steps = [
-                ("ensure_ready", {}),
-                ("open_new_part", {}),
-                ("create_sketch", {"plane": "Top Plane"}),
-                ("add_sketch_entity", {
-                    "entity_type": "rectangle",
-                    "x1": -0.05,
-                    "y1": -0.03,
-                    "x2": 0.05,
-                    "y2": 0.03,
-                }),
-            ]
-            self._run_sequence(steps, 0)
+        steps = [
+            ("ensure_ready", {}),
+            ("open_new_part", {}),
+            ("create_sketch", {"plane": "Top Plane"}),
+            ("add_sketch_entity", {
+                "entity_type": "rectangle",
+                "x1": -0.05,
+                "y1": -0.03,
+                "x2": 0.05,
+                "y2": 0.03,
+            }),
+        ]
 
-        threading.Thread(target=run_sequence, daemon=True).start()
-
-    def _run_sequence(self, steps, index: int) -> None:
-        if index >= len(steps):
-            self._emit("SEQUENCE_COMPLETE", "Test sketch sequence submitted.")
-            return
-        name, args = steps[index]
-        if not self.worker:
-            return
-        self._emit("SEQUENCE", {"step": index + 1, "tool": name, "arguments": args})
-
-        async def one_call() -> Any:
-            assert self.worker is not None and self.worker.session is not None
-            return await self.worker.session.call_tool(name, args)
-
-        assert self.worker.loop is not None
-        future = asyncio.run_coroutine_threadsafe(one_call(), self.worker.loop)
-
-        def done(fut) -> None:
-            try:
-                result = fut.result()
-                self._emit("RESULT", result)
+        async def sequence() -> str:
+            for index, (name, arguments) in enumerate(steps, start=1):
+                self.emit_direct("SEQUENCE", {"step": index, "tool": name, "arguments": arguments})
+                result = await worker.session.call_tool(name, arguments)
+                self.emit_direct("RESULT", result)
                 if getattr(result, "isError", False):
-                    self._emit("SEQUENCE_ABORTED", {"tool": name})
-                    return
-                self.root.after(0, lambda: self._run_sequence(steps, index + 1))
-            except Exception as exc:
-                self._emit("ERROR", f"{type(exc).__name__}: {exc}")
-                self._emit("SEQUENCE_ABORTED", {"tool": name})
+                    raise RuntimeError(f"Test sketch sequence failed at tool '{name}'")
+            return "Test sketch sequence completed."
 
-        future.add_done_callback(done)
+        worker.submit(sequence)
+
+    def emit_direct(self, kind: str, payload: Any) -> None:
+        self.events.put((kind, payload))
 
     def _emit(self, kind: str, payload: Any) -> None:
         self.events.put((kind, payload))
@@ -314,8 +284,7 @@ class SolidAiApp:
             if hasattr(value, "model_dump"):
                 value = value.model_dump(mode="json")
             elif hasattr(value, "__dict__"):
-                data = dict(value.__dict__)
-                value = data
+                value = dict(value.__dict__)
             return json.dumps(value, ensure_ascii=False, indent=2, default=str)
         except Exception:
             return str(value)
