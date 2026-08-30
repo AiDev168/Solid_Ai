@@ -160,6 +160,9 @@ def _score_edge(intent: ReferenceIntent, candidate: Mapping[str, Any]) -> float 
         if raw_bounds is None:
             if intent.role == "outer_vertical" and intent.target_xyz is not None:
                 return math.dist(midpoint, intent.target_xyz)
+            # An unconstrained set reference explicitly means: all currently
+            # evidenced vertical edges. This is useful for pre-mutation tests
+            # where the plan itself is the boundary filter.
             return 0.0
         if not isinstance(raw_bounds, Sequence) or isinstance(raw_bounds, (str, bytes)) or len(raw_bounds) != 4:
             raise ReferenceResolutionError("outer_bounds_m must be [xmin, xmax, ymin, ymax]")
@@ -173,9 +176,7 @@ def _score_edge(intent: ReferenceIntent, candidate: Mapping[str, Any]) -> float 
         )
         if not on_boundary:
             return None
-        if intent.role == "outer_vertical":
-            return math.dist(midpoint, intent.target_xyz) if intent.target_xyz is not None else 0.0
-        return 0.0
+        return math.dist(midpoint, intent.target_xyz) if intent.role == "outer_vertical" and intent.target_xyz is not None else 0.0
     if intent.role == "nearest":
         point = _point(candidate)
         if point is None or intent.target_xyz is None:
@@ -216,10 +217,15 @@ def resolve_reference_set(intent: ReferenceIntent, evidence: ReferenceEvidence) 
     if not scored:
         raise ReferenceResolutionError(f"no candidates satisfy reference role={intent.role} kind={intent.kind}")
     scored.sort(key=lambda item: int(item[1]["backend_index"]))
-    return ReferenceSetBinding(intent.reference_id, canonical.kind, tuple(
-        ReferenceBinding(intent.reference_id, canonical.kind, int(candidate["backend_index"]), canonical.state_version, dict(candidate), score)
-        for score, candidate in scored
-    ), canonical.state_version)
+    return ReferenceSetBinding(
+        intent.reference_id,
+        canonical.kind,
+        tuple(
+            ReferenceBinding(intent.reference_id, canonical.kind, int(candidate["backend_index"]), canonical.state_version, dict(candidate), score)
+            for score, candidate in scored
+        ),
+        canonical.state_version,
+    )
 
 
 def face_index_json(binding: ReferenceBinding) -> int:
