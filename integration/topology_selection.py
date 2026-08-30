@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 
@@ -46,7 +46,11 @@ def normalize_tool_result(value: Any) -> Any:
             return normalize_tool_result(structured)
         content = mapping.get("content")
         if isinstance(content, list):
-            texts = [item.get("text") for item in content if isinstance(item, Mapping) and isinstance(item.get("text"), str)]
+            texts = []
+            for item in content:
+                text = item.get("text") if isinstance(item, Mapping) else getattr(item, "text", None)
+                if isinstance(text, str):
+                    texts.append(text)
             for text in texts:
                 try:
                     return json.loads(text)
@@ -64,23 +68,38 @@ def normalize_tool_result(value: Any) -> Any:
     return value
 
 
+def _xyz(value: Any) -> tuple[float, float, float] | None:
+    if isinstance(value, Mapping):
+        if all(isinstance(value.get(k), (int, float)) and not isinstance(value.get(k), bool) for k in ("x", "y", "z")):
+            return (float(value["x"]), float(value["y"]), float(value["z"]))
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) and len(value) == 3:
+        if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value):
+            return (float(value[0]), float(value[1]), float(value[2]))
+    return None
+
+
 def _point_candidates(edge: Mapping[str, Any]) -> list[tuple[float, float, float]]:
     candidates: list[tuple[float, float, float]] = []
-
-    def add(value: Any) -> None:
-        if isinstance(value, Mapping) and all(isinstance(value.get(k), (int, float)) for k in ("x", "y", "z")):
-            candidates.append((float(value["x"]), float(value["y"]), float(value["z"])))
-
-    for key in ("point", "center", "midpoint", "centroid", "start", "end"):
-        add(edge.get(key))
-
-    if all(isinstance(edge.get(k), (int, float)) for k in ("x", "y", "z")):
+    for key in ("point", "center", "midpoint", "centroid", "mid", "start", "end"):
+        point = _xyz(edge.get(key))
+        if point is not None:
+            candidates.append(point)
+    if all(isinstance(edge.get(k), (int, float)) and not isinstance(edge.get(k), bool) for k in ("x", "y", "z")):
         candidates.append((float(edge["x"]), float(edge["y"]), float(edge["z"])))
-
     for prefix in ("start", "end"):
-        if all(isinstance(edge.get(f"{prefix}_{k}"), (int, float)) for k in ("x", "y", "z")):
-            candidates.append(tuple(float(edge[f"{prefix}_{k}"]) for k in ("x", "y", "z")))
-    return candidates
+        point = _xyz({k: edge.get(f"{prefix}_{k}") for k in ("x", "y", "z")})
+        if point is not None:
+            candidates.append(point)
+    # Remove exact duplicates while preserving order.
+    return list(dict.fromkeys(candidates))
+
+
+def _edge_index(node: Mapping[str, Any]) -> int | None:
+    for key in ("index", "i"):
+        value = node.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+    return None
 
 
 def extract_edges(tool_result: Any) -> list[dict[str, Any]]:
@@ -90,12 +109,11 @@ def extract_edges(tool_result: Any) -> list[dict[str, Any]]:
     for node in _walk(normalized):
         if not isinstance(node, Mapping):
             continue
-        index = node.get("index")
-        if isinstance(index, int) and index >= 0:
-            kind = str(node.get("kind") or node.get("type") or node.get("entity_type") or "").lower()
-            if "edge" in kind or _point_candidates(node):
-                edges.append(dict(node))
-    # Deduplicate by index while preserving first occurrence.
+        index = _edge_index(node)
+        if index is not None and (_point_candidates(node) or "edge" in str(node.get("kind", "")).lower()):
+            item = dict(node)
+            item["index"] = index
+            edges.append(item)
     result: dict[int, dict[str, Any]] = {}
     for edge in edges:
         result.setdefault(int(edge["index"]), edge)
