@@ -145,13 +145,6 @@ def _score_face(intent: ReferenceIntent, candidate: Mapping[str, Any]) -> float 
     return math.dist(point, intent.target_xyz)
 
 
-def _bounds(point: tuple[float, float, float], raw: Sequence[float] | None) -> tuple[float, float, float, float] | None:
-    if raw is None or len(raw) != 4:
-        return None
-    xmin, xmax, ymin, ymax = map(float, raw)
-    return xmin, xmax, ymin, ymax
-
-
 def _score_edge(intent: ReferenceIntent, candidate: Mapping[str, Any]) -> float | None:
     start, end = _xyz(candidate.get("start")), _xyz(candidate.get("end"))
     if start is None or end is None:
@@ -164,10 +157,9 @@ def _score_edge(intent: ReferenceIntent, candidate: Mapping[str, Any]) -> float 
         if midpoint is None:
             return None
         raw_bounds = (intent.criteria or {}).get("outer_bounds_m")
-        b = _bounds(midpoint, raw_bounds)
-        if b is None:
+        if not isinstance(raw_bounds, Sequence) or isinstance(raw_bounds, (str, bytes)) or len(raw_bounds) != 4:
             return None
-        xmin, xmax, ymin, ymax = b
+        xmin, xmax, ymin, ymax = map(float, raw_bounds)
         tol = float((intent.criteria or {}).get("boundary_tolerance_m", 1e-7))
         on_boundary = (
             abs(midpoint[0] - xmin) <= tol
