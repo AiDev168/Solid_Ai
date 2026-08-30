@@ -101,8 +101,11 @@ def _normalize_candidates(raw: Sequence[Mapping[str, Any]], kind: str, state_ver
         if idx is None or idx in seen:
             continue
         normalized = dict(item)
+        original_kind = normalized.get("kind")
         normalized["backend_index"] = idx
         normalized["kind"] = kind
+        if kind == "face" and "surface_kind" not in normalized and original_kind not in {None, "face"}:
+            normalized["surface_kind"] = str(original_kind)
         candidates.append(normalized)
         seen.add(idx)
     if not candidates:
@@ -118,29 +121,23 @@ def edge_evidence(result: Mapping[str, Any], state_version: int) -> ReferenceEvi
     return _normalize_candidates(_walk(result, "edges"), "edge", state_version)
 
 
-def _is_planar_face(item: Mapping[str, Any]) -> bool:
-    if item.get("planar") is True:
-        return True
-    kind = str(item.get("surface_kind", item.get("kind", ""))).lower()
-    if kind in {"plane", "planar", "planarface", "plane_surface"}:
-        return True
-    return _normal(item) is not None
-
-
 def _score_face(intent: ReferenceIntent, candidate: Mapping[str, Any]) -> float | None:
     if intent.role not in {"top_planar", "planar_at_point"}:
         return None
-    if not _is_planar_face(candidate):
+    if candidate.get("planar") is False:
+        return None
+    if candidate.get("surface_kind") not in {None, "plane", "planar", "planarface", "plane_surface"} and _normal(candidate) is None:
         return None
     normal = _unit(_normal(candidate) or ())
-    if normal is not None and abs(normal[2]) < 0.999999:
-        return None
-    point = _point(candidate)
     if intent.role == "top_planar":
-        if point is None:
-            return 0.0
-        return -point[2]
+        if normal is not None and normal[2] < 0.999999:
+            return None
+        point = _point(candidate)
+        return -point[2] if point is not None else 0.0
+    point = _point(candidate)
     if point is None or intent.target_xyz is None:
+        return None
+    if normal is not None and abs(normal[2]) < 0.999999:
         return None
     return math.dist(point, intent.target_xyz)
 
@@ -164,10 +161,7 @@ def _score_edge(intent: ReferenceIntent, candidate: Mapping[str, Any]) -> float 
         if dz <= max(dx, dy) or dz <= 1e-9:
             return None
         midpoint = _point(candidate)
-        if midpoint is None:
-            return None
-        criteria = intent.criteria or {}
-        if not _in_bounds(midpoint, criteria.get("outer_bounds_m")):
+        if midpoint is None or not _in_bounds(midpoint, (intent.criteria or {}).get("outer_bounds_m")):
             return None
         if intent.role == "outer_vertical":
             if intent.target_xyz is None:
@@ -212,11 +206,12 @@ def resolve_reference_set(intent: ReferenceIntent, evidence: ReferenceEvidence) 
     if not scored:
         raise ReferenceResolutionError(f"no candidates satisfy reference role={intent.role} kind={intent.kind}")
     scored.sort(key=lambda item: int(item[1]["backend_index"]))
-    bindings = tuple(
-        ReferenceBinding(intent.reference_id, evidence.kind, int(candidate["backend_index"]), evidence.state_version, dict(candidate), score)
-        for score, candidate in scored
+    return ReferenceSetBinding(
+        intent.reference_id,
+        evidence.kind,
+        tuple(ReferenceBinding(intent.reference_id, evidence.kind, int(candidate["backend_index"]), evidence.state_version, dict(candidate), score) for score, candidate in scored),
+        evidence.state_version,
     )
-    return ReferenceSetBinding(intent.reference_id, evidence.kind, bindings, evidence.state_version)
 
 
 def face_index_json(binding: ReferenceBinding) -> int:
