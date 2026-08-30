@@ -157,8 +157,12 @@ def _score_edge(intent: ReferenceIntent, candidate: Mapping[str, Any]) -> float 
         if midpoint is None:
             return None
         raw_bounds = (intent.criteria or {}).get("outer_bounds_m")
+        if raw_bounds is None:
+            if intent.role == "outer_vertical" and intent.target_xyz is not None:
+                return math.dist(midpoint, intent.target_xyz)
+            return 0.0
         if not isinstance(raw_bounds, Sequence) or isinstance(raw_bounds, (str, bytes)) or len(raw_bounds) != 4:
-            return None
+            raise ReferenceResolutionError("outer_bounds_m must be [xmin, xmax, ymin, ymax]")
         xmin, xmax, ymin, ymax = map(float, raw_bounds)
         tol = float((intent.criteria or {}).get("boundary_tolerance_m", 1e-7))
         on_boundary = (
