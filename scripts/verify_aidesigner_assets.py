@@ -1,6 +1,15 @@
 from __future__ import annotations
 
-from integration.aidesigner_assets import (
+import sys
+from pathlib import Path
+
+# Make the repository root importable when this script is invoked directly as:
+#   python scripts\verify_aidesigner_assets.py
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from integration.aidesigner_assets import (  # noqa: E402
     CAPABILITIES,
     lower_boss,
     lower_fillet,
