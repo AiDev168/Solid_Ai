@@ -1,0 +1,3 @@
+[submodule "vendor/q3ds-solidworks-mcp"]
+	path = vendor/q3ds-solidworks-mcp
+	url = https://github.com/zarcherlot/q3ds-solidworks-mcp.git
