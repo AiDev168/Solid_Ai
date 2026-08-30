@@ -1,0 +1,314 @@
+# Bolt-gauge examples
+
+For repository installation before the semantic MCP can start, use
+`setup_repository_host.ps1`; its `Inspect`, `Configure`, and `Verify` modes are documented in
+[`docs/REPOSITORY_HOST_SETUP.md`](../docs/REPOSITORY_HOST_SETUP.md). This is separate from the
+SolidWorks-specific `bootstrap-solidworks-host` Skill.
+
+## Dimension F0 contract tests
+
+First freeze a read-only model/drawing corpus and generate one probe request per exact-basename
+pair:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\build_dimension_f0_corpus_manifest.py `
+  --input-dir C:\path\to\dimension-corpus `
+  --output-dir C:\temp\dimension-f0-corpus `
+  --repository-root (Get-Location).Path
+```
+
+Run the independent COM-free dimension probe contract suite in a new or empty output directory:
+
+```powershell
+.\scripts\run_dimension_contract_tests.ps1 `
+  -RepositoryRoot (Get-Location).Path `
+  -OutputDirectory C:\temp\dimension-contract-tests `
+  -ProbeRequestDirectory C:\temp\dimension-f0-corpus\probe-requests
+```
+
+This suite is additive to the existing 45 ViewPlan C# contract tests. It does not contact
+SolidWorks and does not write under the source corpus or `validation/`.
+
+To add a production-frozen case, build one request from an independently verified ViewPlan
+drawing and its transaction sidecar. The builder verifies the sidecar's drawing path, drawing
+hash, canonical plan hash, and `verified=true` marker before publishing a new request:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\build_dimension_f0_frozen_request.py `
+  --view-plan C:\path\to\view_plan.json `
+  --verified-drawing C:\path\to\verified.SLDDRW `
+  --verification-sidecar C:\path\to\verified.SLDDRW.verification.json `
+  --publication-directory C:\temp\dimension-f0-corpus\live\frozen-case `
+  --output-request C:\temp\dimension-f0-corpus\probe-requests\frozen-case.json
+```
+
+After a no-repair host preflight passes and the rebuilt C# Execution Service is running, execute
+the hash-bound requests through the research-only F0 endpoint and evaluate every emitted report:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_dimension_f0_live_probes.py `
+  --probe-request-directory C:\temp\dimension-f0-corpus\probe-requests `
+  --summary-output-directory C:\temp\dimension-f0-live-summary
+```
+
+The Python client only orchestrates HTTP and evaluates evidence. All SolidWorks COM calls remain in
+the repository C# service on its STA thread. The endpoint is not registered as an Agent-visible MCP
+tool and is not part of the production DimensionPlan surface.
+
+## Dimension F7 complete qualification matrix
+
+Prepare six real, immutable handoff/recipe cases before starting SolidWorks. The preparation
+request must cover all 18 DimensionPlan kinds exactly once and all six execution elements:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\prepare_dimension_f7_live_matrix.py `
+  --request C:\path\to\dimension-f7-preparation-request.json
+```
+
+The COM-free preparer publishes one validated `dimension_plan.json` per distinct handoff and the
+matrix request last. It rejects fewer than five source models, proxy handoff reuse, legacy recipe
+1.0, missing trusted tolerance/text evidence, output collisions and any incomplete kind/element
+inventory.
+
+Run the generated request only through the semantic MCP and a repository-owned Execution Service:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_dimension_f7_live_matrix.py `
+  --request C:\path\to\dimension-f7-matrix-request.json `
+  --summary-output C:\path\to\dimension-f7-summary.json `
+  --promotion-candidate-output C:\path\to\dimension-capabilities.candidate.json `
+  --execution-service-path D:\solidworks-mcp\solidworks-execution\SolidworksExecution\bin\Debug\SolidworksExecution.exe `
+  --execution-pid 12345
+```
+
+The runner now locks the current 24-tool/zero-prompt surface and validates complete coverage before
+COM. It creates only a reviewable capability candidate; it never replaces production
+`current.json`.
+
+## Layout G0 boundary probe
+
+Run the additive COM-free G0 request contract suite in a new or empty directory:
+
+```powershell
+.\scripts\run_layout_contract_tests.ps1 `
+  -RepositoryRoot (Get-Location).Path `
+  -OutputDirectory C:\temp\layout-contract-tests
+```
+
+Run the independent COM-free G4/G5 DrawingLayoutPlan/compiler/create/verification preflight and
+capability suite separately:
+
+```powershell
+.\scripts\run_drawing_layout_contract_tests.ps1 `
+  -RepositoryRoot (Get-Location).Path `
+  -OutputDirectory C:\temp\drawing-layout-g4-contract-tests
+```
+
+After the no-repair repository host preflight passes and a rebuilt Execution Service is running,
+probe one independently verified dimension drawing without saving it:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_layout_g0_live_probe.py `
+  --dimension-plan C:\path\to\dimension_plan.json `
+  --dimensioned-drawing C:\path\to\dimensioned.SLDDRW `
+  --verification-sidecar C:\path\to\dimensioned.SLDDRW.dimension-verification.json `
+  --publication-directory C:\temp\layout-g0-case
+```
+
+The private endpoint publishes the request, three structured boundary snapshots, and the evidence
+report last. The runner rechecks the three frozen input hashes and applies the repository evidence
+gate. It never promotes `drawing_layout_planner/capabilities/current.json` automatically.
+
+Build and run the fixed six-category G0 matrix from independently verified F7 case evidence:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\build_layout_g0_matrix_request.py `
+  --f7-evidence-directory C:\path\to\matrix-live-r14 `
+  --matrix-root C:\temp\layout-g0-six-category `
+  --matrix-id G0-SIX-CATEGORY
+
+.\.venv\Scripts\python.exe .\scripts\run_layout_g0_live_matrix.py `
+  --matrix-request C:\temp\layout-g0-six-category\layout-g0-matrix-request.json `
+  --summary-path C:\temp\layout-g0-six-category\layout-g0-matrix-summary.json `
+  --execution-base-url http://127.0.0.1:5000
+```
+
+The matrix runner accepts only an HTTP loopback origin and explicitly bypasses ambient HTTP proxy
+settings. It verifies all six persisted evidence files against their in-memory objects before it
+publishes the aggregate summary once.
+
+Verified ViewPlan drawings can be probed with `--view-plan` and `--view-drawing`. The isolated
+title-block fixture builder is research-only and writes a new drawing plus a hash-bound manifest:
+
+```powershell
+.\scripts\build_layout_g0_title_block_fixture.ps1 `
+  -RepositoryRoot (Get-Location).Path `
+  -SourceDrawing C:\path\to\verified.SLDDRW `
+  -SourceVerificationSidecar C:\path\to\verified.SLDDRW.verification.json `
+  -PublicationDirectory C:\temp\g0-title-block-fixture `
+  -SolidWorksInteropDirectory D:\SW\SOLIDWORKS
+```
+
+After the six-category matrix and at least three supplemental evidence files exist,
+`qualify_layout_g0.py` publishes the immutable final qualification and a separate capability
+promotion candidate. It fails closed if any catalog item remains neither exact-supported nor
+live-qualified unsupported.
+
+## Layout G1 immutable handoff
+
+After a no-repair host preflight passes and the rebuilt Execution Service is running, initialize a
+G1 handoff only from an executed and independently verified DimensionPlan drawing:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_layout_g1_live_handoff.py `
+  --dimension-plan C:\path\to\dimension_plan.json `
+  --dimensioned-drawing C:\path\to\dimensioned.SLDDRW `
+  --verification-sidecar C:\path\to\dimensioned.SLDDRW.dimension-verification.json `
+  --publication-directory C:\temp\layout-g1-handoff
+```
+
+The runner builds the same strict request as the semantic initializer, bypasses ambient proxies for
+the local qualification call, and independently validates the final handoff and its returned hash.
+The C# service performs all SolidWorks readback and never saves the upstream drawing.
+
+## Layout G7 qualification matrix
+
+`run_drawing_layout_g7_live_matrix.py` runs the immutable nine-positive/one-negative final-layout
+matrix through the default semantic MCP. It verifies the exact running Execution Service image,
+locks the 24-tool/zero-prompt surface, protects all recursive inputs, and publishes each evidence,
+summary and optional capability candidate only to new paths. Qualification tools never edit the
+production manifest and reject any `unsupported` G0 boundary before COM.
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_drawing_layout_g7_live_matrix.py `
+  --request C:\path\to\drawing-layout-g7-matrix-request.json `
+  --summary-output C:\path\to\drawing-layout-g7-summary.json `
+  --execution-service-path D:\solidworks-mcp\solidworks-execution\SolidworksExecution\bin\Debug\SolidworksExecution.exe `
+  --execution-pid 12345
+```
+
+G7 completed with the all-supported G0 `1.1.0` registry. The immutable matrix summary SHA-256 is
+`91e95b5c34ad92ac422839d6eb5585983336117bae7dbfc113f8e68be1122ecc`; the generated capability
+candidate was promoted only after a byte-for-byte comparison. Because matrix outputs are immutable
+and production capabilities are now supported, any future rerun must use a new output root and an
+explicitly prepared qualification context rather than overwriting the completed evidence.
+
+## H0 five-Skill release readiness
+
+Before any final production live-chain run, publish one COM-free readiness report to a new path:
+
+```powershell
+New-Item -ItemType Directory -Path C:\temp\solidpilot-h0-r1
+.\.venv\Scripts\python.exe .\scripts\check_h0_release_readiness.py `
+  --repository-root . `
+  --output C:\temp\solidpilot-h0-r1\h0-readiness.json
+```
+
+The audit checks the exact five-Skill and 24-tool/zero-prompt contracts, all three plan Schemas,
+four production capability manifests, the G0/G7 hash binding, actual FastMCP discovery, and the
+clean Git commit required for frozen evidence. Exit code `2` is an expected, schema-valid blocked
+result. At present it identifies the unpromoted F7 dimension registry, so the H0 production live
+chain must not run yet.
+
+After a future production run captures every semantic response and artifact, validate and publish
+the final H1 chain ledger once:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\validate_h1_five_skill_chain.py `
+  --candidate C:\path\to\h1-chain-evidence.candidate.json `
+  --output C:\path\to\h1-chain-evidence.json
+```
+
+The validator rejects qualification-tool substitution, request/plan hash drift, repeated successor
+drawing paths, changed source inputs, missing production operations and final sidecar mismatch. A
+blocked H0 report can never produce complete H1 evidence.
+
+Before creating a future live session, freeze its exact inputs, new output namespace and minimal
+16-step production schedule:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\prepare_h2_five_skill_session.py `
+  --request C:\path\to\h2-session-request.json `
+  --output C:\path\to\h2-session-preflight.json `
+  --repository-root .
+```
+
+H2 is COM-free and does not create the session root. Exit code `2` publishes a valid blocked report
+when H0, Git state, hashes, extensions or output-path isolation are not ready. Only exit code `0`
+may be consumed by the later live-session creator.
+
+Create and populate the append-only H3 session only from a ready H2 report:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\h3_five_skill_session.py create `
+  --preflight C:\evidence\h2-session-preflight.json `
+  --preflight-sha256 <sha256> `
+  --repository-root .
+```
+
+The same command provides `capture-operation`, `capture-stage`, and `finalize` subcommands. Each
+semantic response and stage manifest is published once in strict sequence. A failed response stops
+the session permanently; finalization independently validates the assembled H1 candidate. H3 only
+captures calls made by the five Skills and never invokes MCP or SolidWorks itself.
+
+Execute and append-capture one H3-authorized production semantic step through the repository Codex
+stdio MCP:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_h4_five_skill_step.py `
+  --request C:\path\to\01-semantic-step.json `
+  --request-sha256 <sha256> `
+  --diagnostics C:\path\to\01-semantic-step.mcp.stderr.log
+```
+
+H4 rejects any tool other than H3's exact next operation before launching MCP. It performs one call
+only, captures the JSON response immediately, and permanently blocks the session after a semantic
+failure or ambiguous post-invocation transport failure. It never calls qualification, private
+executor, HTTP or direct COM interfaces.
+
+After all 16 H4 calls, five H3 stage captures and H3 finalization succeed, run the final COM-free
+H5-H9 release closure:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\finalize_h5_h9_release_candidate.py `
+  --request C:\path\to\h5-h9-release-request.json `
+  --request-sha256 <sha256> `
+  --output C:\path\to\five-skill-release-candidate.json `
+  --repository-root D:\solidworks-mcp
+```
+
+The auditor independently rechecks traceability, all three plan/C# contract chains, the public
+semantic boundary, save/close/read-only-reopen evidence and every final frozen hash. It publishes
+only a complete candidate to a new path outside the repository; no partial or simulated release
+report is accepted.
+
+## Legacy examples
+
+These scripts record the SolidWorks 2026 development and verification flow used
+to exercise SolidPilot's part-modeling tools. They are examples, not an
+automated test suite, and they operate on a live SolidWorks session.
+
+- `gauge_v4.py` is the latest complete gauge build.
+- `gauge_stage*.py` and `gauge_v2_stage*.py` preserve smaller diagnostic stages.
+- `gauge_text_test*.py`, `gauge_numbers_a.py`, and
+  `gauge_extrude_text.py` document the sketch-text investigation. New clients
+  should prefer the public `add_sketch_text` MCP tool over these low-level COM
+  experiments.
+
+Run examples with the repository virtual environment:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\gauge_v4.py
+```
+
+Generated parts, drawings, and captures default to the ignored `outputs/`
+directory. Override that destination without editing a script:
+
+```powershell
+$env:SOLIDPILOT_OUTPUT_DIR = "C:\CAD\SolidPilot Outputs"
+.\.venv\Scripts\python.exe .\scripts\gauge_v4.py
+```
+
+All geometry values passed to SolidPilot are in metres. Review a script before
+running it: several diagnostic stages assume that a particular part or sketch
+is already active.

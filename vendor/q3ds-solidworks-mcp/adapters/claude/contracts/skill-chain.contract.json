@@ -1,0 +1,201 @@
+{
+  "schema_version": "1.0",
+  "contract_id": "q3ds-solidworks-five-skill-production-chain",
+  "default_mcp": {
+    "config_path": ".codex/config.toml",
+    "schema_path": "adapters/claude/contracts/semantic-tools.schema.json",
+    "tool_count": 24,
+    "prompt_count": 0,
+    "tools": [
+      "solidworks_status",
+      "inspect_solidworks_host",
+      "bootstrap_solidworks_host",
+      "inspect_part_for_drawing",
+      "initialize_part_drawing_handoff",
+      "plan_part_drawing_views",
+      "publish_validated_part_drawing_view_plan",
+      "validate_part_drawing_view_plan",
+      "create_part_drawing_from_view_plan",
+      "verify_part_drawing_view_plan",
+      "initialize_part_drawing_dimension_handoff",
+      "publish_validated_part_drawing_dimension_plan",
+      "validate_part_drawing_dimension_plan",
+      "qualify_dimensioned_part_drawing",
+      "verify_qualified_dimensioned_part_drawing",
+      "create_dimensioned_part_drawing",
+      "verify_dimensioned_part_drawing",
+      "initialize_part_drawing_layout_handoff",
+      "publish_validated_part_drawing_layout_plan",
+      "validate_part_drawing_layout_plan",
+      "qualify_final_part_drawing",
+      "verify_qualified_final_part_drawing",
+      "create_final_part_drawing",
+      "verify_final_part_drawing"
+    ]
+  },
+  "planning": {
+    "default_branch": "explicit_skill_publish",
+    "sampling_branch_requires_explicit_user_request": true,
+    "branches_are_mutually_exclusive": true,
+    "candidate_limit": 1,
+    "publication_limit": 1,
+    "published_plan_is_immutable": true,
+    "capability_blocked_may_publish": true,
+    "capability_blocked_may_execute": false
+  },
+  "request_continuity": {
+    "source": "initialize_part_drawing_handoff.result.planning_request",
+    "canonical_sha256_field": "planning_request_sha256",
+    "must_be_unchanged": true,
+    "operations": [
+      "publish_validated_part_drawing_view_plan",
+      "validate_part_drawing_view_plan",
+      "create_part_drawing_from_view_plan",
+      "verify_part_drawing_view_plan"
+    ]
+  },
+  "dimension_request_continuity": {
+    "source": "initialize_part_drawing_dimension_handoff.result.planning_request",
+    "canonical_sha256_field": "planning_request_sha256",
+    "must_be_unchanged": true,
+    "operations": [
+      "publish_validated_part_drawing_dimension_plan",
+      "validate_part_drawing_dimension_plan",
+      "create_dimensioned_part_drawing",
+      "verify_dimensioned_part_drawing"
+    ]
+  },
+  "dimension_qualification": {
+    "scope": "f7_live_evidence_only",
+    "matrix_bound": true,
+    "allows_planned_capabilities": true,
+    "allows_unsupported_capabilities": false,
+    "mutates_capability_manifest": false,
+    "operations": [
+      "qualify_dimensioned_part_drawing",
+      "verify_qualified_dimensioned_part_drawing"
+    ]
+  },
+  "layout_request_continuity": {
+    "source": "initialize_part_drawing_layout_handoff.result.planning_request_context",
+    "predecessor_request_source": "initialize_part_drawing_dimension_handoff.result.planning_request",
+    "predecessor_request_field": "source_dimension_request",
+    "canonical_sha256_field": "planning_request_sha256",
+    "predecessor_sha256_field": "source_dimension_request_sha256",
+    "must_be_unchanged": true,
+    "operations": [
+      "publish_validated_part_drawing_layout_plan",
+      "validate_part_drawing_layout_plan",
+      "create_final_part_drawing",
+      "verify_final_part_drawing"
+    ]
+  },
+  "layout_qualification": {
+    "scope": "g7_live_evidence_only",
+    "matrix_bound": true,
+    "allows_planned_capabilities": true,
+    "allows_unsupported_capabilities": false,
+    "requires_supported_g0_boundaries": true,
+    "mutates_capability_manifest": false,
+    "operations": [
+      "qualify_final_part_drawing",
+      "verify_qualified_final_part_drawing"
+    ]
+  },
+  "stages": [
+    {
+      "order": 1,
+      "skill": "bootstrap-solidworks-host",
+      "path": ".codex/skills/bootstrap-solidworks-host/SKILL.md",
+      "allowed_tools": [
+        "inspect_solidworks_host",
+        "bootstrap_solidworks_host"
+      ],
+      "success_states": ["pass", "warning"],
+      "stop_states": ["blocked"]
+    },
+    {
+      "order": 2,
+      "skill": "solidworks-initialize-drawing-handoff",
+      "path": ".codex/skills/solidworks-initialize-drawing-handoff/SKILL.md",
+      "allowed_tools": [
+        "solidworks_status",
+        "initialize_part_drawing_handoff"
+      ],
+      "success_states": ["COMPLETED"],
+      "stop_states": ["FAILED", "blocked"]
+    },
+    {
+      "order": 3,
+      "skill": "solidworks-create-drawing-views",
+      "path": ".codex/skills/solidworks-create-drawing-views/SKILL.md",
+      "allowed_tools": [
+        "solidworks_status",
+        "inspect_part_for_drawing",
+        "initialize_part_drawing_handoff",
+        "plan_part_drawing_views",
+        "publish_validated_part_drawing_view_plan",
+        "validate_part_drawing_view_plan",
+        "create_part_drawing_from_view_plan",
+        "verify_part_drawing_view_plan"
+      ],
+      "success_states": ["published", "VALID", "COMPLETED"],
+      "stop_states": [
+        "rejected",
+        "capability_blocked",
+        "EXECUTOR_REJECTED",
+        "FAILED"
+      ]
+    },
+    {
+      "order": 4,
+      "skill": "solidworks-dimension-drawing",
+      "path": ".codex/skills/solidworks-dimension-drawing/SKILL.md",
+      "allowed_tools": [
+        "solidworks_status",
+        "initialize_part_drawing_dimension_handoff",
+        "publish_validated_part_drawing_dimension_plan",
+        "validate_part_drawing_dimension_plan",
+        "create_dimensioned_part_drawing",
+        "verify_dimensioned_part_drawing"
+      ],
+      "success_states": ["ready", "published", "VALID", "COMPLETED"],
+      "stop_states": [
+        "blocked",
+        "rejected",
+        "capability_blocked",
+        "EXECUTOR_REJECTED",
+        "FAILED"
+      ]
+    },
+    {
+      "order": 5,
+      "skill": "solidworks-finalize-drawing-layout",
+      "path": ".codex/skills/solidworks-finalize-drawing-layout/SKILL.md",
+      "allowed_tools": [
+        "solidworks_status",
+        "initialize_part_drawing_layout_handoff",
+        "publish_validated_part_drawing_layout_plan",
+        "validate_part_drawing_layout_plan",
+        "create_final_part_drawing",
+        "verify_final_part_drawing"
+      ],
+      "success_states": ["ready", "published", "VALID", "COMPLETED"],
+      "stop_states": [
+        "blocked",
+        "rejected",
+        "capability_blocked",
+        "EXECUTOR_REJECTED",
+        "FAILED"
+      ]
+    }
+  ],
+  "forbidden_agent_boundaries": [
+    "private_executor_tools",
+    "raw_http",
+    "second_mcp_client",
+    "python_com",
+    "ui_automation",
+    "legacy_drawing_plan_bridge"
+  ]
+}
