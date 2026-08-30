@@ -5,17 +5,11 @@ Source lineage:
 - Ai_Designer recovery/diagnosis.py
 - Ai_Designer recovery/topology_solver.py
 - Ai_Designer solidpilot/topology_rebinding_v1.py
-
-The recovery layer never invents CAD operations. It diagnoses bounded failures,
-selects a registered deterministic solver, refreshes evidence, rebinds the
-semantic anchor by geometry, and returns a fresh backend selector for a bounded
-retry.
 """
 from __future__ import annotations
 
 import ast
 import json
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from math import sqrt
@@ -38,8 +32,14 @@ def diagnose_failure(*, code: str, message: str = "") -> FailureDiagnosis:
         "TOPOLOGY_REFERENCE_INVALID", "FACE_NOT_FOUND", "EDGE_NOT_FOUND", "AXIS_NOT_FOUND",
     }
     if normalized in topology:
-        return FailureDiagnosis("topology", normalized, True, ("topology-rebinding-v1",), "refresh topology evidence and rebind the requested reference")
-    return FailureDiagnosis("unknown", normalized, False, (), message or "unsupported failure; recovery is fail-closed")
+        return FailureDiagnosis(
+            "topology", normalized, True, ("topology-rebinding-v1",),
+            "refresh topology evidence and rebind the requested reference",
+        )
+    return FailureDiagnosis(
+        "unknown", normalized, False, (),
+        message or "unsupported failure; recovery is fail-closed",
+    )
 
 
 @dataclass(frozen=True)
@@ -67,9 +67,11 @@ def _try_decode_mapping(text: str) -> Mapping[str, Any] | None:
 
 def _extract_mapping(text: str) -> Mapping[str, Any] | None:
     direct = _try_decode_mapping(text.strip())
-    if direct is not None:
+    if direct is not None and ("error" in direct or "code" in direct):
         return direct
+
     starts = [i for i, char in enumerate(text) if char == "{"]
+    candidates: list[Mapping[str, Any]] = []
     for start in reversed(starts):
         depth = 0
         quote: str | None = None
@@ -93,15 +95,19 @@ def _extract_mapping(text: str) -> Mapping[str, Any] | None:
                 if depth == 0:
                     parsed = _try_decode_mapping(text[start : pos + 1])
                     if parsed is not None:
-                        return parsed
+                        candidates.append(parsed)
                     break
-    return None
+
+    for candidate in candidates:
+        if "error" in candidate or "code" in candidate:
+            return candidate
+    return candidates[0] if candidates else None
 
 
 def normalize_runtime_failure(error: Any) -> RuntimeFailure:
     raw = str(error)
     payload = _extract_mapping(raw) or {}
-    nested = payload.get("error", {})
+    nested = payload.get("error", payload)
     if not isinstance(nested, Mapping):
         nested = {}
     backend_code = str(nested.get("code", "")).strip().upper()
@@ -173,7 +179,10 @@ def _edge_score(anchor: Mapping[str, Any], candidate: Mapping[str, Any]) -> floa
     astart, aend = _vec(anchor.get("start")), _vec(anchor.get("end"))
     cstart, cend = _vec(candidate.get("start")), _vec(candidate.get("end"))
     if astart and aend and cstart and cend:
-        d = min(_distance(astart, cstart) + _distance(aend, cend), _distance(astart, cend) + _distance(aend, cstart))
+        d = min(
+            _distance(astart, cstart) + _distance(aend, cend),
+            _distance(astart, cend) + _distance(aend, cstart),
+        )
         if d > 2e-6:
             return None
         score += d / 1e-6
@@ -243,7 +252,12 @@ def make_anchor(candidate: Mapping[str, Any], *, source_state_version: int) -> T
     return TopologyAnchor(kind, index, dict(candidate), source_state_version)
 
 
-def rebind_anchor(anchor: TopologyAnchor, candidates: Sequence[Mapping[str, Any]], *, target_state_version: int) -> TopologyBinding:
+def rebind_anchor(
+    anchor: TopologyAnchor,
+    candidates: Sequence[Mapping[str, Any]],
+    *,
+    target_state_version: int,
+) -> TopologyBinding:
     scored: list[tuple[float, Mapping[str, Any]]] = []
     for candidate in candidates:
         if candidate.get("kind") != anchor.kind:
