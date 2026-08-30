@@ -47,11 +47,7 @@ class ReferenceSetBinding:
 
 def _xyz(value: Any) -> tuple[float, float, float] | None:
     if isinstance(value, Mapping):
-        if all(
-            isinstance(value.get(k), (int, float))
-            and not isinstance(value.get(k), bool)
-            for k in ("x", "y", "z")
-        ):
+        if all(isinstance(value.get(k), (int, float)) and not isinstance(value.get(k), bool) for k in ("x", "y", "z")):
             return float(value["x"]), float(value["y"]), float(value["z"])
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) and len(value) >= 3:
         if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value[:3]):
@@ -86,38 +82,18 @@ def _unit(v: Sequence[float]) -> tuple[float, float, float] | None:
     return tuple(float(x) / n for x in v)
 
 
-def _is_planar_face(item: Mapping[str, Any]) -> bool:
-    if item.get("planar") is True:
-        return True
-    kind = str(item.get("surface_kind", item.get("kind", ""))).lower()
-    if kind in {"plane", "planar", "planarface", "plane_surface"}:
-        return True
-    return _normal(item) is not None
-
-
-def _walk_faces(value: Any) -> list[Mapping[str, Any]]:
+def _walk(value: Any, key: str) -> list[Mapping[str, Any]]:
     if isinstance(value, Mapping):
-        faces = value.get("faces")
-        if isinstance(faces, Sequence) and not isinstance(faces, (str, bytes)):
-            return [item for item in faces if isinstance(item, Mapping)]
+        direct = value.get(key)
+        if isinstance(direct, Sequence) and not isinstance(direct, (str, bytes)):
+            return [item for item in direct if isinstance(item, Mapping)]
         data = value.get("data")
         if isinstance(data, Mapping) and data is not value:
-            return _walk_faces(data)
+            return _walk(data, key)
     return []
 
 
-def _walk_edges(value: Any) -> list[Mapping[str, Any]]:
-    if isinstance(value, Mapping):
-        edges = value.get("edges")
-        if isinstance(edges, Sequence) and not isinstance(edges, (str, bytes)):
-            return [item for item in edges if isinstance(item, Mapping)]
-        data = value.get("data")
-        if isinstance(data, Mapping) and data is not value:
-            return _walk_edges(data)
-    return []
-
-
-def _normalize_candidates(raw: Sequence[Mapping[str, Any]], kind: str) -> ReferenceEvidence:
+def _normalize_candidates(raw: Sequence[Mapping[str, Any]], kind: str, state_version: int) -> ReferenceEvidence:
     candidates: list[Mapping[str, Any]] = []
     seen: set[int] = set()
     for item in raw:
@@ -131,60 +107,78 @@ def _normalize_candidates(raw: Sequence[Mapping[str, Any]], kind: str) -> Refere
         seen.add(idx)
     if not candidates:
         raise ReferenceResolutionError(f"SolidPilot {kind} analysis contained no indexed {kind}s")
-    return ReferenceEvidence(kind, tuple(candidates), 0)
+    return ReferenceEvidence(kind, tuple(candidates), state_version)
 
 
 def face_evidence(result: Mapping[str, Any], state_version: int) -> ReferenceEvidence:
-    evidence = _normalize_candidates(_walk_faces(result), "face")
-    return ReferenceEvidence(evidence.kind, evidence.candidates, state_version)
+    return _normalize_candidates(_walk(result, "faces"), "face", state_version)
 
 
 def edge_evidence(result: Mapping[str, Any], state_version: int) -> ReferenceEvidence:
-    evidence = _normalize_candidates(_walk_edges(result), "edge")
-    return ReferenceEvidence(evidence.kind, evidence.candidates, state_version)
+    return _normalize_candidates(_walk(result, "edges"), "edge", state_version)
+
+
+def _is_planar_face(item: Mapping[str, Any]) -> bool:
+    if item.get("planar") is True:
+        return True
+    kind = str(item.get("surface_kind", item.get("kind", ""))).lower()
+    if kind in {"plane", "planar", "planarface", "plane_surface"}:
+        return True
+    return _normal(item) is not None
 
 
 def _score_face(intent: ReferenceIntent, candidate: Mapping[str, Any]) -> float | None:
-    if intent.role in {"top_planar", "planar_at_point"} and not _is_planar_face(candidate):
+    if intent.role not in {"top_planar", "planar_at_point"}:
+        return None
+    if not _is_planar_face(candidate):
         return None
     normal = _unit(_normal(candidate) or ())
+    if normal is not None and abs(normal[2]) < 0.999999:
+        return None
+    point = _point(candidate)
     if intent.role == "top_planar":
-        if normal is not None and normal[2] < 0.999999:
-            return None
-        point = _point(candidate)
-        return -point[2] if point is not None else 0.0
-    if intent.role == "planar_at_point":
-        point = _point(candidate)
-        if point is None or intent.target_xyz is None:
-            return None
-        if normal is not None and abs(normal[2]) < 0.999999:
-            return None
-        return math.dist(point, intent.target_xyz)
-    return None
+        if point is None:
+            return 0.0
+        return -point[2]
+    if point is None or intent.target_xyz is None:
+        return None
+    return math.dist(point, intent.target_xyz)
+
+
+def _in_bounds(point: tuple[float, float, float], bounds: Sequence[float] | None, tolerance: float = 1e-8) -> bool:
+    if not bounds or len(bounds) != 4:
+        return True
+    xmin, xmax, ymin, ymax = map(float, bounds)
+    return xmin - tolerance <= point[0] <= xmax + tolerance and ymin - tolerance <= point[1] <= ymax + tolerance
 
 
 def _score_edge(intent: ReferenceIntent, candidate: Mapping[str, Any]) -> float | None:
+    start = _xyz(candidate.get("start"))
+    end = _xyz(candidate.get("end"))
+    if start is None or end is None:
+        return None
+    dx = abs(end[0] - start[0])
+    dy = abs(end[1] - start[1])
+    dz = abs(end[2] - start[2])
+    if intent.role in {"outer_vertical", "all_outer_vertical"}:
+        if dz <= max(dx, dy) or dz <= 1e-9:
+            return None
+        midpoint = _point(candidate)
+        if midpoint is None:
+            return None
+        criteria = intent.criteria or {}
+        if not _in_bounds(midpoint, criteria.get("outer_bounds_m")):
+            return None
+        if intent.role == "outer_vertical":
+            if intent.target_xyz is None:
+                return 0.0
+            return math.dist(midpoint, intent.target_xyz)
+        return 0.0
     if intent.role == "nearest":
         point = _point(candidate)
         if point is None or intent.target_xyz is None:
             return None
         return math.dist(point, intent.target_xyz)
-    if intent.role in {"outer_vertical", "all_outer_vertical"}:
-        start = _xyz(candidate.get("start"))
-        end = _xyz(candidate.get("end"))
-        if start is None or end is None:
-            return None
-        dx = abs(end[0] - start[0])
-        dy = abs(end[1] - start[1])
-        dz = abs(end[2] - start[2])
-        if dz <= max(dx, dy) or dz <= 1e-9:
-            return None
-        if intent.role == "outer_vertical":
-            point = _point(candidate)
-            if point is None or intent.target_xyz is None:
-                return None
-            return math.dist(point, intent.target_xyz)
-        return 0.0
     return None
 
 
