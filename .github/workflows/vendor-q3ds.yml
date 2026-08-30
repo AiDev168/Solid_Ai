@@ -1,0 +1,44 @@
+name: Vendor q3ds SolidPilot
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/vendor-q3ds.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Solid_Ai
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch complete q3ds-solidworks-mcp source
+        run: |
+          set -eux
+          rm -rf /tmp/q3ds
+          git clone --depth 1 https://github.com/zarcherlot/q3ds-solidworks-mcp.git /tmp/q3ds
+          rm -rf /tmp/q3ds/.git
+          rm -rf vendor/q3ds-solidworks-mcp
+          mkdir -p vendor/q3ds-solidworks-mcp
+          cp -a /tmp/q3ds/. vendor/q3ds-solidworks-mcp/
+          rm -f .gitmodules
+
+      - name: Commit complete vendored source
+        run: |
+          set -eux
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A vendor/q3ds-solidworks-mcp .gitmodules
+          if git diff --cached --quiet; then
+            echo 'No q3ds changes to commit.'
+            exit 0
+          fi
+          git commit -m 'build: vendor complete q3ds SolidPilot source [skip ci]'
+          git push origin HEAD:main
