@@ -1,11 +1,15 @@
-"""Standalone recovery assets ported from Ai_Designer.
+"""Deterministic recovery assets reused from Ai_Designer.
 
-Source: AiDev168/Ai_Designer recovery/controller.py, diagnosis.py,
-registry.py, runtime_failure_v1.py, topology_solver.py and
-solidpilot/topology_rebinding_v1.py.
+Source lineage:
+- Ai_Designer recovery/controller.py
+- Ai_Designer recovery/diagnosis.py
+- Ai_Designer recovery/topology_solver.py
+- Ai_Designer solidpilot/topology_rebinding_v1.py
 
-Only deterministic, bounded recovery behavior is included. The old LLM/agent
-stack is deliberately not imported.
+The recovery layer never invents CAD operations. It diagnoses bounded failures,
+selects a registered deterministic solver, refreshes evidence, rebinds the
+semantic anchor by geometry, and returns a fresh backend selector for a bounded
+retry.
 """
 from __future__ import annotations
 
@@ -29,18 +33,26 @@ class FailureDiagnosis:
 def diagnose_failure(*, code: str, message: str = "") -> FailureDiagnosis:
     normalized = str(code).strip().upper()
     topology = {
-        "STALE_REFERENCE", "STALE_FACE_SELECTOR", "STALE_EDGE_SELECTOR",
-        "TOPOLOGY_REFERENCE_INVALID", "FACE_NOT_FOUND", "EDGE_NOT_FOUND",
+        "STALE_REFERENCE",
+        "STALE_FACE_SELECTOR",
+        "STALE_EDGE_SELECTOR",
+        "TOPOLOGY_REFERENCE_INVALID",
+        "FACE_NOT_FOUND",
+        "EDGE_NOT_FOUND",
         "AXIS_NOT_FOUND",
     }
     if normalized in topology:
         return FailureDiagnosis(
-            category="topology", code=normalized, retryable=True,
+            category="topology",
+            code=normalized,
+            retryable=True,
             solver_hints=("topology-rebinding-v1",),
             reason="refresh topology evidence and rebind the requested reference",
         )
     return FailureDiagnosis(
-        category="unknown", code=normalized, retryable=False,
+        category="unknown",
+        code=normalized,
+        retryable=False,
         reason=message or "unsupported failure; recovery is fail-closed",
     )
 
@@ -55,17 +67,26 @@ class RuntimeFailure:
 def normalize_runtime_failure(error: Any) -> RuntimeFailure:
     raw = str(error)
     payload: Mapping[str, Any] = {}
-    match = re.search(r"\{.*\}", raw)
-    if match:
+    matches = re.findall(r"\{.*?\}", raw)
+    for text in reversed(matches):
         try:
-            parsed = ast.literal_eval(match.group(0))
-            if isinstance(parsed, Mapping):
-                payload = parsed
+            parsed = ast.literal_eval(text)
         except (SyntaxError, ValueError):
-            pass
+            continue
+        if isinstance(parsed, Mapping):
+            payload = parsed
+            break
     error_payload = payload.get("error", {})
-    backend_code = str(error_payload.get("code", "")) if isinstance(error_payload, Mapping) else ""
-    backend_message = str(error_payload.get("message", "")) if isinstance(error_payload, Mapping) else ""
+    backend_code = (
+        str(error_payload.get("code", ""))
+        if isinstance(error_payload, Mapping)
+        else ""
+    )
+    backend_message = (
+        str(error_payload.get("message", ""))
+        if isinstance(error_payload, Mapping)
+        else ""
+    )
     if backend_code == "FACE_NOT_FOUND":
         return RuntimeFailure("STALE_FACE_SELECTOR", backend_message or raw, raw)
     if backend_code == "EDGE_NOT_FOUND":
@@ -106,35 +127,119 @@ def _distance(a: Sequence[float], b: Sequence[float]) -> float:
     return sqrt(sum((float(x) - float(y)) ** 2 for x, y in zip(a, b)))
 
 
+def _unit(value: Sequence[float]) -> tuple[float, float, float] | None:
+    norm = sqrt(sum(float(x) ** 2 for x in value))
+    if norm <= 1e-12:
+        return None
+    return tuple(float(x) / norm for x in value)
+
+
+def _dot(a: Sequence[float], b: Sequence[float]) -> float:
+    return sum(float(x) * float(y) for x, y in zip(a, b))
+
+
 def _edge_score(anchor: Mapping[str, Any], candidate: Mapping[str, Any]) -> float | None:
     if anchor.get("kind") != "edge" or candidate.get("kind") != "edge":
         return None
     score = 0.0
     compared = 0
-    amid = _vec(anchor.get("mid"))
-    cmid = _vec(candidate.get("mid"))
+    amid = _vec(anchor.get("mid") or anchor.get("midpoint"))
+    cmid = _vec(candidate.get("mid") or candidate.get("midpoint"))
     if amid is not None and cmid is not None:
         d = _distance(amid, cmid)
         if d > 1e-6:
             return None
         score += d / 1e-6
         compared += 1
+
     astart, aend = _vec(anchor.get("start")), _vec(anchor.get("end"))
     cstart, cend = _vec(candidate.get("start")), _vec(candidate.get("end"))
     if astart and aend and cstart and cend:
-        d = min(_distance(astart, cstart) + _distance(aend, cend),
-                _distance(astart, cend) + _distance(aend, cstart))
+        d = min(
+            _distance(astart, cstart) + _distance(aend, cend),
+            _distance(astart, cend) + _distance(aend, cstart),
+        )
         if d > 2e-6:
             return None
         score += d / 1e-6
         compared += 1
+
     if anchor.get("length") is not None and candidate.get("length") is not None:
         d = abs(float(anchor["length"]) - float(candidate["length"]))
-        tol = 1e-6 * max(1.0, abs(float(anchor["length"])), abs(float(candidate["length"])))
+        tol = 1e-6 * max(
+            1.0, abs(float(anchor["length"])), abs(float(candidate["length"]))
+        )
         if d > tol:
             return None
         score += d / tol
         compared += 1
+    return score if compared else None
+
+
+def _face_score(anchor: Mapping[str, Any], candidate: Mapping[str, Any]) -> float | None:
+    if anchor.get("kind") != "face" or candidate.get("kind") != "face":
+        return None
+    if (
+        anchor.get("surface_kind")
+        and candidate.get("surface_kind")
+        and anchor["surface_kind"] != candidate["surface_kind"]
+    ):
+        return None
+
+    score = 0.0
+    compared = 0
+
+    if "planar" in anchor and "planar" in candidate:
+        if bool(anchor["planar"]) != bool(candidate["planar"]):
+            return None
+        compared += 1
+
+    # Point/origin is supporting geometric evidence. A planar face may be trimmed,
+    # so area is not treated as identity.
+    for key in ("origin", "point"):
+        av, cv = _vec(anchor.get(key)), _vec(candidate.get(key))
+        if av is not None and cv is not None:
+            d = _distance(av, cv)
+            if d > 1e-6:
+                return None
+            score += d / 1e-6
+            compared += 1
+            break
+
+    an, cn = _unit(_vec(anchor.get("normal")) or ()), _unit(
+        _vec(candidate.get("normal")) or ()
+    )
+    if an is not None and cn is not None:
+        angular = 1.0 - abs(_dot(an, cn))
+        if angular > 1e-8:
+            return None
+        score += angular / 1e-8
+        compared += 1
+
+    aa, ca = _unit(_vec(anchor.get("axis")) or ()), _unit(
+        _vec(candidate.get("axis")) or ()
+    )
+    if anchor.get("axis") is not None and candidate.get("axis") is not None:
+        if aa is None or ca is None or 1.0 - abs(_dot(aa, ca)) > 1e-8:
+            return None
+        compared += 1
+
+    if anchor.get("radius") is not None and candidate.get("radius") is not None:
+        av, cv = float(anchor["radius"]), float(candidate["radius"])
+        tol = 1e-6 * max(1.0, abs(av), abs(cv))
+        if abs(av - cv) > tol:
+            return None
+        score += abs(av - cv) / tol
+        compared += 1
+
+    if anchor.get("area") is not None and candidate.get("area") is not None:
+        av, cv = float(anchor["area"]), float(candidate["area"])
+        tol = 1e-4 * max(1.0, abs(av), abs(cv))
+        # Area is intentionally a soft penalty: trimming/cutting a surviving face
+        # may change its area without changing its geometric identity.
+        score += min(abs(av - cv) / tol, 10.0)
+        compared += 1
+
     return score if compared else None
 
 
@@ -146,54 +251,41 @@ def make_anchor(candidate: Mapping[str, Any], *, source_state_version: int) -> T
     return TopologyAnchor(kind, index, dict(candidate), source_state_version)
 
 
-def rebind_anchor(anchor: TopologyAnchor, candidates: Sequence[Mapping[str, Any]], *, target_state_version: int) -> TopologyBinding:
+def rebind_anchor(
+    anchor: TopologyAnchor,
+    candidates: Sequence[Mapping[str, Any]],
+    *,
+    target_state_version: int,
+) -> TopologyBinding:
+    """Rebind a pre-mutation face/edge anchor by geometry, never by old index."""
     scored: list[tuple[float, Mapping[str, Any]]] = []
     for candidate in candidates:
         if candidate.get("kind") != anchor.kind:
             continue
-        score = _edge_score(anchor.geometry, candidate) if anchor.kind == "edge" else _face_score(anchor.geometry, candidate)
+        score = (
+            _edge_score(anchor.geometry, candidate)
+            if anchor.kind == "edge"
+            else _face_score(anchor.geometry, candidate)
+        )
         if score is not None:
             scored.append((score, candidate))
     if not scored:
         raise ValueError(f"no {anchor.kind} candidate matches the anchor")
     scored.sort(key=lambda item: item[0])
-    if len(scored) > 1 and abs(scored[1][0] - scored[0][0]) <= 1e-9:
-        raise ValueError(f"ambiguous {anchor.kind} rebinding")
     best_score, best = scored[0]
+    if len(scored) > 1 and abs(scored[1][0] - best_score) <= 1e-9:
+        raise ValueError(f"ambiguous {anchor.kind} rebinding")
     index = best.get("backend_index", best.get("i"))
     if not isinstance(index, int):
         raise ValueError("matched candidate has no integer backend index")
-    return TopologyBinding(anchor.kind, index, anchor.backend_index,
-                           anchor.source_state_version, target_state_version, best_score)
-
-
-def _face_score(anchor: Mapping[str, Any], candidate: Mapping[str, Any]) -> float | None:
-    if anchor.get("kind") != "face" or candidate.get("kind") != "face":
-        return None
-    if anchor.get("surface_kind") and candidate.get("surface_kind") and anchor["surface_kind"] != candidate["surface_kind"]:
-        return None
-    score = 0.0
-    compared = 0
-    for key in ("origin", "point"):
-        av, cv = _vec(anchor.get(key)), _vec(candidate.get(key))
-        if av and cv:
-            d = _distance(av, cv)
-            if d > 1e-6:
-                return None
-            score += d / 1e-6
-            compared += 1
-            break
-    an, cn = _vec(anchor.get("normal")), _vec(candidate.get("normal"))
-    if an and cn:
-        an_norm = sqrt(sum(x*x for x in an)); cn_norm = sqrt(sum(x*x for x in cn))
-        if an_norm <= 1e-12 or cn_norm <= 1e-12:
-            return None
-        angular = 1.0 - abs(sum(an[i]*cn[i] for i in range(3)) / (an_norm*cn_norm))
-        if angular > 1e-8:
-            return None
-        score += angular / 1e-8
-        compared += 1
-    return score if compared else None
+    return TopologyBinding(
+        anchor.kind,
+        index,
+        anchor.backend_index,
+        anchor.source_state_version,
+        target_state_version,
+        best_score,
+    )
 
 
 @dataclass(frozen=True)
@@ -220,7 +312,9 @@ class RecoveryResult:
 class RecoverySolver(Protocol):
     name: str
     categories: frozenset[str]
+
     def can_handle(self, category: str, evidence: Any) -> bool: ...
+
     def recover(self, request: RecoveryRequest) -> Any: ...
 
 
@@ -234,9 +328,15 @@ class RecoveryRegistry:
         self._solvers[solver.name] = solver
 
     def select(self, category: str, evidence: Any) -> RecoverySolver:
-        matches = [s for s in self._solvers.values() if category in s.categories and s.can_handle(category, evidence)]
+        matches = [
+            solver
+            for solver in self._solvers.values()
+            if category in solver.categories and solver.can_handle(category, evidence)
+        ]
         if len(matches) != 1:
-            raise ValueError(f"expected exactly one recovery solver for {category}, found {len(matches)}")
+            raise ValueError(
+                f"expected exactly one recovery solver for {category}, found {len(matches)}"
+            )
         return matches[0]
 
 
@@ -264,8 +364,8 @@ class TopologyRecoverySolver:
 
     def can_handle(self, category: str, evidence: Any) -> bool:
         return category == "topology" and isinstance(evidence, TopologyRecoveryEvidence) and bool(
-            (evidence.edge_anchor and evidence.edge_candidates) or
-            (evidence.face_anchor and evidence.face_candidates)
+            (evidence.edge_anchor and evidence.edge_candidates)
+            or (evidence.face_anchor and evidence.face_candidates)
         )
 
     def recover(self, request: RecoveryRequest) -> TopologyRecoveryResult:
@@ -278,24 +378,36 @@ class TopologyRecoverySolver:
             if ev.edge_anchor:
                 if ev.target_edge_state_version is None:
                     return TopologyRecoveryResult(False, error="missing target edge state_version")
-                edge_binding = rebind_anchor(ev.edge_anchor, ev.edge_candidates, target_state_version=ev.target_edge_state_version)
+                edge_binding = rebind_anchor(
+                    ev.edge_anchor,
+                    ev.edge_candidates,
+                    target_state_version=ev.target_edge_state_version,
+                )
             if ev.face_anchor:
                 if ev.target_face_state_version is None:
                     return TopologyRecoveryResult(False, error="missing target face state_version")
-                face_binding = rebind_anchor(ev.face_anchor, ev.face_candidates, target_state_version=ev.target_face_state_version)
+                face_binding = rebind_anchor(
+                    ev.face_anchor,
+                    ev.face_candidates,
+                    target_state_version=ev.target_face_state_version,
+                )
             return TopologyRecoveryResult(True, face_binding=face_binding, edge_binding=edge_binding)
         except ValueError as exc:
             return TopologyRecoveryResult(False, error=str(exc))
 
 
 class RecoveryController:
+    """Bounded deterministic orchestration over registered solvers."""
+
     def __init__(self, registry: RecoveryRegistry):
         self.registry = registry
 
     def recover(self, request: RecoveryRequest) -> RecoveryResult:
+        if request.max_attempts < 1:
+            raise ValueError("max_attempts must be at least 1")
         solver = self.registry.select(request.category, request.evidence)
         attempts: list[RecoveryAttempt] = []
-        for _ in range(max(1, request.max_attempts)):
+        for _ in range(request.max_attempts):
             result = solver.recover(request)
             success = bool(getattr(result, "recovered", False))
             attempts.append(RecoveryAttempt(solver.name, success, result))
@@ -303,15 +415,25 @@ class RecoveryController:
                 return RecoveryResult(True, tuple(attempts))
         return RecoveryResult(False, tuple(attempts))
 
-    def diagnose_and_recover(self, *, code: str, message: str = "", evidence: Any = None, max_attempts: int = 1) -> tuple[FailureDiagnosis, RecoveryResult | None]:
+    def diagnose_and_recover(
+        self,
+        *,
+        code: str,
+        message: str = "",
+        evidence: Any = None,
+        max_attempts: int = 1,
+    ) -> tuple[FailureDiagnosis, RecoveryResult | None]:
         diagnosis = diagnose_failure(code=code, message=message)
         if not diagnosis.retryable:
             return diagnosis, None
-        return diagnosis, self.recover(RecoveryRequest(diagnosis.category, diagnosis.code, evidence, max_attempts))
+        return diagnosis, self.recover(
+            RecoveryRequest(diagnosis.category, diagnosis.code, evidence, max_attempts)
+        )
 
 
 class RecoveryAssets:
     """Default registry of deterministic Ai_Designer recovery assets."""
+
     def __init__(self) -> None:
         self.registry = RecoveryRegistry()
         self.registry.register(TopologyRecoverySolver())
@@ -319,8 +441,21 @@ class RecoveryAssets:
 
 
 __all__ = [
-    "FailureDiagnosis", "RuntimeFailure", "normalize_runtime_failure", "diagnose_failure",
-    "TopologyAnchor", "TopologyBinding", "make_anchor", "rebind_anchor",
-    "TopologyRecoveryEvidence", "TopologyRecoveryResult", "TopologyRecoverySolver",
-    "RecoveryRequest", "RecoveryAttempt", "RecoveryResult", "RecoveryRegistry", "RecoveryController", "RecoveryAssets",
+    "FailureDiagnosis",
+    "RuntimeFailure",
+    "normalize_runtime_failure",
+    "diagnose_failure",
+    "TopologyAnchor",
+    "TopologyBinding",
+    "make_anchor",
+    "rebind_anchor",
+    "TopologyRecoveryEvidence",
+    "TopologyRecoveryResult",
+    "TopologyRecoverySolver",
+    "RecoveryRequest",
+    "RecoveryAttempt",
+    "RecoveryResult",
+    "RecoveryRegistry",
+    "RecoveryController",
+    "RecoveryAssets",
 ]
