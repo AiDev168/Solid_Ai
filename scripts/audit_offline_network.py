@@ -56,7 +56,7 @@ def main() -> int:
             violations.append(f"READ_ERROR {path}: {exc}")
             continue
         for url in URL_RE.findall(text):
-            clean = url.rstrip(".,;:)"])}
+            clean = url.rstrip(".,;:)"]")
             if not is_loopback_url(clean):
                 violations.append(f"REMOTE_URL {path.relative_to(ROOT)}: {clean}")
 
