@@ -5,20 +5,17 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from .aidesigner_assets import lower_boss, lower_fillet
-from .motor_bracket_plan_v1 import (
-    FeatureSpec,
-    MotorBracketPlanV1,
-    MOTOR_BRACKET_V1,
-    ordered_features,
-)
+from .motor_bracket_plan_v1 import FeatureSpec, MotorBracketPlanV1, MOTOR_BRACKET_V1, ordered_features
 from .recovery_assets import RecoveryAssets, TopologyRecoveryEvidence, make_anchor, normalize_runtime_failure
 from .reference_resolution_v1 import (
     ReferenceIntent,
+    ReferenceSetBinding,
     edge_evidence,
     edge_indices_json,
     face_evidence,
     face_index_json,
     resolve_reference,
+    resolve_reference_set,
 )
 
 
@@ -85,8 +82,17 @@ def _ensure_status(result: Any, tool: str) -> None:
         raise RuntimeError(f"{tool}: unexpected status {result.get('status')!r}: {result}")
 
 
+def _reference_from_plan(raw: dict[str, Any]) -> ReferenceIntent:
+    return ReferenceIntent(
+        reference_id=str(raw["reference_id"]),
+        kind=str(raw["kind"]),
+        role=str(raw["role"]),
+        feature_id=str(raw.get("feature_id", "")),
+    )
+
+
 class MotorBracketRuntimeV1:
-    """Execute a semantic multi-feature plan through the live SolidPilot boundary."""
+    """Execute the semantic plan through one shared reference/evidence lifecycle."""
 
     def __init__(self, session: RuntimeSession, plan: MotorBracketPlanV1 = MOTOR_BRACKET_V1):
         self.session = session
@@ -96,53 +102,32 @@ class MotorBracketRuntimeV1:
 
     async def _record(self, feature_id: str, tool: str, result: Any) -> Any:
         _ensure_status(result, tool)
-        self.report.evidence.append(
-            ExecutionEvidence(feature_id, tool, _state_version(result), result)
-        )
+        self.report.evidence.append(ExecutionEvidence(feature_id, tool, _state_version(result), result))
         return result
 
-    async def _resolve_top_face(self, reference: Mapping[str, Any]):
+    async def _resolve_face(self, raw_reference: dict[str, Any]):
         analysis = await _call(self.session, "analyze_model", {"analysis_type": "faces"})
         evidence = face_evidence(analysis, int(analysis.get("state_version", 0)))
-        intent = ReferenceIntent(
-            reference_id=str(reference["reference_id"]),
-            kind="face",
-            role=str(reference["role"]),
-            feature_id=str(reference.get("feature_id", "")),
-        )
-        return resolve_reference(intent, evidence)
+        binding = resolve_reference(_reference_from_plan(raw_reference), evidence)
+        return binding
 
-    async def _resolve_outer_edge(self, *, reference_id: str) -> Any:
+    async def _resolve_outer_edges(self):
         analysis = await _call(self.session, "analyze_model", {"analysis_type": "edges"})
         evidence = edge_evidence(analysis, int(analysis.get("state_version", 0)))
         intent = ReferenceIntent(
-            reference_id=reference_id,
+            reference_id="outer_vertical_edges_for_fillet",
             kind="edge",
-            role="outer_vertical",
-            feature_id="",
-            target_xyz=(0.0, 0.0, 0.0),
+            role="all_outer_vertical",
         )
-        return resolve_reference(intent, evidence), analysis
+        return resolve_reference_set(intent, evidence)
 
     async def _profile(self, feature: FeatureSpec) -> None:
         p = feature.params
-        await self._record(
-            feature.feature_id,
-            "create_sketch",
-            await _call(self.session, "create_sketch", {"plane": p["plane"]}),
-        )
+        await self._record(feature.feature_id, "create_sketch", await _call(self.session, "create_sketch", {"plane": p["plane"]}))
         half_w, half_h = p["width_m"] / 2.0, p["height_m"] / 2.0
-        await self._record(
-            feature.feature_id,
-            "add_sketch_entity",
-            await _call(self.session, "add_sketch_entity", {
-                "entity_type": "rectangle",
-                "x1": -half_w,
-                "y1": -half_h,
-                "x2": half_w,
-                "y2": half_h,
-            }),
-        )
+        await self._record(feature.feature_id, "add_sketch_entity", await _call(self.session, "add_sketch_entity", {
+            "entity_type": "rectangle", "x1": -half_w, "y1": -half_h, "x2": half_w, "y2": half_h,
+        }))
         self.report.feature_status[feature.feature_id] = "COMPLETED"
 
     async def _boss(self, feature: FeatureSpec) -> None:
@@ -152,68 +137,40 @@ class MotorBracketRuntimeV1:
 
     async def _holes(self, feature: FeatureSpec) -> None:
         p = feature.params
-        binding = await self._resolve_top_face(p["support_ref"])
-        await self._record(
-            feature.feature_id,
-            "create_sketch",
-            await _call(self.session, "create_sketch", {"on_face": True, "face_index": face_index_json(binding)}),
-        )
+        binding = await self._resolve_face(p["support_ref"])
+        await self._record(feature.feature_id, "create_sketch", await _call(self.session, "create_sketch", {
+            "on_face": True, "face_index": face_index_json(binding),
+        }))
         for cx, cy in p["centers_m"]:
-            await self._record(
-                feature.feature_id,
-                "add_sketch_entity",
-                await _call(self.session, "add_sketch_entity", {
-                    "entity_type": "circle",
-                    "cx": cx,
-                    "cy": cy,
-                    "radius": p["diameter_m"] / 2.0,
-                }),
-            )
-        await self._record(
-            feature.feature_id,
-            "extrude_feature",
-            await _call(self.session, "extrude_feature", {
-                "depth": 0.01,
-                "feature_type": "cut",
-                "reverse": False,
-                "through": True,
-                "up_to_face_index": -1,
-                "mid_plane": False,
-            }),
-        )
+            await self._record(feature.feature_id, "add_sketch_entity", await _call(self.session, "add_sketch_entity", {
+                "entity_type": "circle", "cx": cx, "cy": cy, "radius": p["diameter_m"] / 2.0,
+            }))
+        await self._record(feature.feature_id, "extrude_feature", await _call(self.session, "extrude_feature", {
+            "depth": 0.01, "feature_type": "cut", "reverse": False, "through": True,
+            "up_to_face_index": -1, "mid_plane": False,
+        }))
         self.report.feature_status[feature.feature_id] = "COMPLETED"
 
     async def _rib(self, feature: FeatureSpec) -> None:
         p = feature.params
-        binding = await self._resolve_top_face(p["support_ref"])
-        await self._record(
-            feature.feature_id,
-            "create_sketch",
-            await _call(self.session, "create_sketch", {"on_face": True, "face_index": face_index_json(binding)}),
-        )
+        binding = await self._resolve_face(p["support_ref"])
+        await self._record(feature.feature_id, "create_sketch", await _call(self.session, "create_sketch", {
+            "on_face": True, "face_index": face_index_json(binding),
+        }))
         half_width = p["width_m"] / 2.0
-        await self._record(
-            feature.feature_id,
-            "add_sketch_entity",
-            await _call(self.session, "add_sketch_entity", {
-                "entity_type": "rectangle",
-                "x1": p["x_center_m"] - half_width,
-                "y1": -0.025,
-                "x2": p["x_center_m"] + half_width,
-                "y2": 0.025,
-            }),
-        )
+        await self._record(feature.feature_id, "add_sketch_entity", await _call(self.session, "add_sketch_entity", {
+            "entity_type": "rectangle",
+            "x1": p["x_center_m"] - half_width, "y1": -0.025,
+            "x2": p["x_center_m"] + half_width, "y2": 0.025,
+        }))
         call = lower_boss(depth_m=float(p["height_m"]))
         await self._record(feature.feature_id, call["tool"], await _call(self.session, call["tool"], call["params"]))
         self.report.feature_status[feature.feature_id] = "COMPLETED"
 
     async def _fillet(self, feature: FeatureSpec) -> None:
-        binding, before = await self._resolve_outer_edge(reference_id="outer_vertical_edge_for_fillet")
+        edge_binding = await self._resolve_outer_edges()
         try:
-            call = lower_fillet(
-                radius_m=float(feature.params["radius_m"]),
-                edge_indices=edge_indices_json(binding),
-            )
+            call = lower_fillet(radius_m=float(feature.params["radius_m"]), edge_indices=edge_indices_json(edge_binding))
             await self._record(feature.feature_id, call["tool"], await _call(self.session, call["tool"], call["params"]))
             self.report.feature_status[feature.feature_id] = "COMPLETED"
             return
@@ -222,26 +179,34 @@ class MotorBracketRuntimeV1:
 
         fresh = await _call(self.session, "analyze_model", {"analysis_type": "edges"})
         fresh_evidence = edge_evidence(fresh, int(fresh.get("state_version", 0)))
-        anchor = make_anchor({"kind": "edge", **binding.evidence, "backend_index": binding.backend_index}, source_state_version=binding.state_version)
-        diagnosis, recovery = self.recovery.controller.diagnose_and_recover(
-            code=failure.code,
-            message=failure.message,
-            evidence=TopologyRecoveryEvidence(
-                edge_anchor=anchor,
-                edge_candidates=fresh_evidence.candidates,
-                target_edge_state_version=fresh_evidence.state_version,
-            ),
-            max_attempts=1,
-        )
-        self.report.recovery.append({"diagnosis": diagnosis, "recovery": recovery})
-        if recovery is None or not recovery.recovered:
-            raise RuntimeError(f"{failure.code}: topology recovery did not recover the fillet reference")
-        rebound = recovery.attempts[-1].result.edge_binding
-        if rebound is None:
-            raise RuntimeError("topology recovery returned no edge binding")
+        diagnosis_entries = []
+        rebound_indices: list[int] = []
+        for binding in edge_binding.bindings:
+            anchor = make_anchor(
+                {"kind": "edge", **binding.evidence, "backend_index": binding.backend_index},
+                source_state_version=binding.state_version,
+            )
+            diagnosis, recovery = self.recovery.controller.diagnose_and_recover(
+                code=failure.code,
+                message=failure.message,
+                evidence=TopologyRecoveryEvidence(
+                    edge_anchor=anchor,
+                    edge_candidates=fresh_evidence.candidates,
+                    target_edge_state_version=fresh_evidence.state_version,
+                ),
+                max_attempts=1,
+            )
+            diagnosis_entries.append({"diagnosis": diagnosis, "recovery": recovery})
+            if recovery is None or not recovery.recovered:
+                raise RuntimeError(f"{failure.code}: topology recovery failed for edge {binding.backend_index}")
+            rebound = recovery.attempts[-1].result.edge_binding
+            if rebound is None:
+                raise RuntimeError("topology recovery returned no edge binding")
+            rebound_indices.append(rebound.backend_index)
+        self.report.recovery.extend(diagnosis_entries)
         call = lower_fillet(
             radius_m=float(feature.params["radius_m"]),
-            edge_indices=json.dumps([rebound.backend_index], separators=(",", ":")),
+            edge_indices=json.dumps(rebound_indices, separators=(",", ":")),
         )
         await self._record(feature.feature_id, call["tool"], await _call(self.session, call["tool"], call["params"]))
         self.report.feature_status[feature.feature_id] = "COMPLETED"
