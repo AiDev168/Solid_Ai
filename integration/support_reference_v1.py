@@ -104,68 +104,100 @@ def resolve_extrude_end_face(
     angular_tolerance: float = 1e-6,
     ambiguity_factor: float = 1.25,
 ) -> dict[str, Any]:
-    """Resolve an extrusion end face from source-frame geometry.
+    """Resolve an extrusion end face independently of sketch-frame orientation.
 
-    Acceptance requires matching extrusion direction and representative-point
-    proximity. A separate ambiguity halo prevents silently selecting a single
-    face when another geometrically plausible candidate is nearby.
+    SolidWorks can report a sketch frame normal opposite to the physical
+    direction used by the extrusion operation. We therefore evaluate both
+    physically possible end planes (forward and reverse along the frame
+    normal), while requiring each candidate face normal to agree with the
+    corresponding plane direction. Ambiguity remains fail-closed.
     """
     if ambiguity_factor < 1.0:
         raise SupportReferenceError("ambiguity_factor must be >= 1")
 
-    expected_point = expected_extrude_end(frame, depth_m)
-    matches: list[tuple[float, Mapping[str, Any], float]] = []
-    near_candidates: list[tuple[float, Mapping[str, Any]]] = []
+    directions = (
+        (frame.normal, 1.0),
+        (tuple(-value for value in frame.normal), -1.0),
+    )
+    matches: list[tuple[float, Mapping[str, Any], float, int]] = []
+    near_candidates: list[tuple[float, Mapping[str, Any], int]] = []
 
-    for candidate in candidates:
-        if candidate.get("planar") is False:
-            continue
-        point = _candidate_point(candidate)
-        normal = _candidate_normal(candidate)
-        if point is None or normal is None:
-            continue
+    for direction, sign in directions:
+        expected_point = tuple(
+            frame.origin[i] + direction[i] * depth_m for i in range(3)
+        )
+        for candidate in candidates:
+            if candidate.get("planar") is False:
+                continue
+            point = _candidate_point(candidate)
+            normal = _candidate_normal(candidate)
+            if point is None or normal is None:
+                continue
 
-        angular = 1.0 - _dot(normal, frame.normal)
-        if angular > angular_tolerance:
-            continue
+            angular = 1.0 - _dot(normal, direction)
+            if angular > angular_tolerance:
+                continue
 
-        point_distance = _distance(point, expected_point)
-        if point_distance <= tolerance_m:
-            score = (
-                point_distance / max(tolerance_m, 1e-12)
-                + angular / max(angular_tolerance, 1e-12)
-            )
-            matches.append((score, candidate, point_distance))
-        elif point_distance <= tolerance_m * ambiguity_factor:
-            near_candidates.append((point_distance, candidate))
+            point_distance = _distance(point, expected_point)
+            if point_distance <= tolerance_m:
+                score = (
+                    point_distance / max(tolerance_m, 1e-12)
+                    + angular / max(angular_tolerance, 1e-12)
+                )
+                matches.append((score, candidate, point_distance, int(sign)))
+            elif point_distance <= tolerance_m * ambiguity_factor:
+                near_candidates.append((point_distance, candidate, int(sign)))
 
     if not matches:
+        expected_forward = tuple(
+            frame.origin[i] + frame.normal[i] * depth_m for i in range(3)
+        )
+        expected_reverse = tuple(
+            frame.origin[i] - frame.normal[i] * depth_m for i in range(3)
+        )
         raise SupportReferenceError(
             f"no extrusion-end face matches {reference_id}; "
-            f"expected point={expected_point}, normal={frame.normal}"
+            f"expected either point={expected_forward} or point={expected_reverse}, "
+            f"frame.normal={frame.normal}"
         )
 
-    matches.sort(key=lambda item: (item[0], _candidate_index(item[1])))
-    best_score, best, best_distance = matches[0]
+    matches.sort(key=lambda item: (item[0], _candidate_index(item[1]), item[3]))
+    best_score, best, best_distance, chosen_sign = matches[0]
 
-    for _, candidate in near_candidates:
-        candidate_distance = _distance(_candidate_point(candidate) or expected_point, expected_point)
+    if len(matches) > 1:
+        second = matches[1]
+        if (
+            _candidate_index(second[1]) == _candidate_index(best)
+            or abs(second[2] - best_distance) <= tolerance_m * 0.25
+        ):
+            raise SupportReferenceError(
+                f"ambiguous extrusion-end face for reference {reference_id}: "
+                "multiple accepted candidates are too close to distinguish safely"
+            )
+
+    for _, candidate, _sign in near_candidates:
+        candidate_distance = min(
+            _distance(
+                _candidate_point(candidate) or frame.origin,
+                tuple(frame.origin[i] + direction[i] * depth_m for i in range(3)),
+            )
+            for direction, _direction_sign in directions
+        )
         if candidate_distance <= tolerance_m * ambiguity_factor:
             raise SupportReferenceError(
                 f"ambiguous extrusion-end face for reference {reference_id}: "
                 f"candidate {_candidate_index(candidate)} is inside ambiguity halo"
             )
 
-    if len(matches) > 1:
-        second_distance = matches[1][2]
-        if abs(second_distance - best_distance) <= tolerance_m * 0.25:
-            raise SupportReferenceError(
-                f"ambiguous extrusion-end face for reference {reference_id}: "
-                "multiple accepted candidates are too close to distinguish safely"
-            )
-
     candidate = dict(best)
     candidate["backend_index"] = _candidate_index(candidate)
+    expected_point = tuple(
+        frame.origin[i] + (frame.normal[i] if chosen_sign == 1 else -frame.normal[i]) * depth_m
+        for i in range(3)
+    )
+    expected_normal = tuple(
+        frame.normal[i] if chosen_sign == 1 else -frame.normal[i] for i in range(3)
+    )
 
     return {
         "reference_id": reference_id,
@@ -174,7 +206,8 @@ def resolve_extrude_end_face(
         "backend_index": candidate["backend_index"],
         "state_version": state_version,
         "expected_point": expected_point,
-        "expected_normal": frame.normal,
+        "expected_normal": expected_normal,
+        "orientation_sign": chosen_sign,
         "evidence": candidate,
         "score": best_score,
     }
@@ -206,8 +239,6 @@ def resolve_extrusion_boundary_edges(
 
         delta = tuple(end[i] - start[i] for i in range(3))
         length = math.sqrt(sum(float(v) ** 2 for v in delta))
-        # Degenerate topology edges are valid backend evidence but cannot be
-        # classified directionally. They are ignored rather than fatal.
         if length <= 1e-12:
             continue
 
