@@ -125,20 +125,25 @@ def test_load_stack_requires_canonical_assets(monkeypatch):
         (engineering, "engineering_intake_assessment_v1"),
         (engineering, "requirements_planning_v2"),
         (engineering, "requirements_solidpilot_v1"),
-        (modules["ai_designer.agentic"], "recovery_coordinator_v1"),
-        (modules["ai_designer.agentic"], "supervisor"),
+        (agentic_pkg, "recovery_coordinator_v1"),
+        (agentic_pkg, "supervisor"),
         (ai, "agents"),
         (recovery, "controller"),
         (recovery, "registry"),
         (recovery, "topology_solver"),
         (ai, "diagnostics"),
         (ai, "planning"),
-        (modules["ai_designer.agents"], "agentic_engineering_loop_v1"),
+        (agents, "agentic_engineering_loop_v1"),
     ):
         setattr(parent, child.split(".")[-1], modules[f"{parent.__name__}.{child}"])
 
+    # This test isolates stack loading from provider qualification. The real
+    # runtime must still require an explicitly configured provider.
     monkeypatch.setattr(bridge, "_bootstrap_source_tree", lambda: Path("."))
     monkeypatch.delenv("BENCHMARK_PROVIDER", raising=False)
+    monkeypatch.setenv("AIDESIGNER_LLM_BASE_URL", "http://test-provider/v1")
+    monkeypatch.setenv("AIDESIGNER_LLM_MODEL", "test-model")
+    monkeypatch.setenv("AIDESIGNER_LLM_API_KEY", "test-key")
 
     stack = bridge.load_stack()
 
