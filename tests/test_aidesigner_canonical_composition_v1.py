@@ -95,7 +95,6 @@ def test_load_stack_requires_canonical_assets(monkeypatch):
     class TopologySolver: pass
     class Diagnosis: pass
     class Repair: pass
-    class Legacy: pass
 
     gateway.LLMGateway = LLMGateway
     engineering_modules["complex_engineering_pipeline_v1"].ComplexEngineeringPipelineV1 = ComplexPipeline
@@ -111,7 +110,6 @@ def test_load_stack_requires_canonical_assets(monkeypatch):
     topology.TopologyRebindingRecoverySolver = TopologySolver
     diagnosis.DiagnosisAgent = Diagnosis
     repair.ExecutionRepairAgent = Repair
-    legacy.LegacyRepairBridge = Legacy
 
     for parent, child in (
         (ai, "llm"),
