@@ -40,7 +40,7 @@ class QualificationHarnessV1:
     def plan(self, *, capability_ids: set[str] | None = None) -> list[QualificationScenario]:
         if capability_ids is None:
             return list(self._scenarios)
-        return [s for s in self._scenarios if s.capability_id in capability_ids]
+        return [s for s in self._scenarios if s.capability_id in capability_ids or s.scenario_id in capability_ids]
 
     async def run(
         self,
@@ -84,10 +84,13 @@ class QualificationHarnessV1:
 def build_core_modeling_scenarios() -> tuple[QualificationScenario, ...]:
     return (
         QualificationScenario(
-            "Q-CUT-001", "part.cut_extrude", "prismatic", "Blind pocket", "Verify closed sketch + cut extrusion.",
+            "Q-CUT-001", "part.cut_extrude", "prismatic", "Through pocket", "Verify closed sketch + cut extrusion against an existing solid body.",
             (
                 {"tool": "create_sketch", "params": {"plane": "Top Plane"}},
                 {"tool": "add_sketch_entity", "params": {"entity_type": "rectangle", "x1": -0.02, "y1": -0.015, "x2": 0.02, "y2": 0.015}},
+                {"tool": "extrude_feature", "params": {"depth": 0.01, "feature_type": "boss"}},
+                {"tool": "create_sketch", "params": {"on_face": True, "face_x": 0.0, "face_y": 0.005, "face_z": 0.0}},
+                {"tool": "add_sketch_entity", "params": {"entity_type": "rectangle", "x1": -0.01, "y1": -0.007, "x2": 0.01, "y2": 0.007}},
                 {"tool": "extrude_feature", "params": {"depth": 0.005, "feature_type": "cut"}},
             ),
             ("COMPLETED", "body_count_preserved", "volume_decreases"),
