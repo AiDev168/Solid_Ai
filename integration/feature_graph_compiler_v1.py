@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from .aidesigner_assets import CapabilitySpec, get_capability
+from .aidesigner_assets import CapabilitySpec
 from .feature_capability_registry_v1 import (
     FeatureCapabilityRegistryV1,
     build_default_feature_capability_registry,
@@ -56,7 +56,7 @@ def _profile(node: FeatureNode, capability: CapabilitySpec) -> CompiledFeature:
     create = Operation(
         node.feature_id,
         capability.capability_id,
-        capability.tool,
+        "create_sketch",
         {"plane": params.get("plane", "Top Plane")},
     )
     entity = Operation(
@@ -154,22 +154,16 @@ def compile_feature_graph(
     *,
     capability_registry: FeatureCapabilityRegistryV1 | None = None,
 ) -> CompiledPlan:
-    """Compile semantic features using only explicit registry bindings.
-
-    Adding a new feature kind requires registering an explicit semantic binding;
-    there is no fallback that maps unknown features to a merely similar tool.
-    """
+    """Compile using explicit feature-kind bindings; never apply tool similarity fallback."""
     registry = capability_registry or build_default_feature_capability_registry()
     compiled: list[CompiledFeature] = []
     for node in graph.features:
-        capability_id = registry.capability_for(node.kind)
-        if capability_id is None:
+        binding = registry.binding_for(node.kind)
+        if binding is None:
             raise FeatureGraphCompileError(
                 f"no explicit capability binding for semantic feature kind: {node.kind}"
             )
-        capability = get_capability(capability_id)
-        if capability is None:
-            raise FeatureGraphCompileError(f"capability registry missing: {capability_id}")
+        capability = binding.capability
         handler = _HANDLERS.get(node.kind)
         if handler is None:
             raise FeatureGraphCompileError(f"compiler handler missing: {node.kind}")
