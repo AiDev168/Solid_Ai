@@ -1,7 +1,7 @@
 @echo off
 setlocal
-cd /d "%~dp0.."
+cd /d "%~dp1.."
 set "PYTHON=%CD%\vendor\q3ds-solidworks-mcp\.venv\Scripts\python.exe"
-"%PYTHON%" "%CD%\scripts\run_revolve_stepped_v2.py"
+"%PYTHON%" -m scripts.run_revolve_stepped_v2
 set "CODE=%ERRORLEVEL%"
 endlocal & exit /b %CODE%
