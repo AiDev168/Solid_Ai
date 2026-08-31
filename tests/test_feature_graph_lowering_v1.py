@@ -8,7 +8,7 @@ from integration.feature_graph_lowering_v1 import (
 from integration.feature_graph_v1 import feature_graph_from_dict
 
 
-def test_hole_pattern_lowers_only_with_explicit_diameter_and_centers():
+def test_hole_pattern_lowers_only_with_explicit_backend_ready_inputs():
     graph = feature_graph_from_dict({
         "schema": "solid-ai.feature-graph.v1",
         "part_id": "p",
@@ -22,6 +22,7 @@ def test_hole_pattern_lowers_only_with_explicit_diameter_and_centers():
                 "fastener": "M8",
                 "count": 4,
                 "diameter_mm": 8.0,
+                "support_face_index": 5,
                 "centers_mm": [[-50, -30], [50, -30], [50, 30], [-50, 30]],
                 "through_depth_m": 0.01,
             },
@@ -37,6 +38,7 @@ def test_hole_pattern_lowers_only_with_explicit_diameter_and_centers():
         "add_sketch_entity",
         "extrude_feature",
     ]
+    assert ops[0].params == {"on_face": True, "face_index": 5}
     assert ops[1].params["radius"] == pytest.approx(0.004)
     assert ops[1].params["cx"] == pytest.approx(-0.05)
     assert ops[-1].params["feature_type"] == "cut"
@@ -57,6 +59,7 @@ def test_m8_alone_never_gets_converted_to_a_backend_diameter():
             "params": {
                 "fastener": "M8",
                 "count": 4,
+                "support_face_index": 5,
                 "centers_mm": [[-50, -30], [50, -30], [50, 30], [-50, 30]],
             },
         }],
