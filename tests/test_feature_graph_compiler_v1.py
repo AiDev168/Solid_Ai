@@ -34,7 +34,7 @@ def test_compiler_binds_each_semantic_kind_to_a_capability():
         "part.create_sketch",
         "part.extrude_boss",
         "part.hole",
-        "part.extrude_boss",
+        "part.rib",
         "edge.fillet",
     ]
 
