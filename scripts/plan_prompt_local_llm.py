@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 
-from app.llm_feature_graph_v1 import LocalLLMConfig, plan_prompt
+from app.llm_feature_graph_v1 import LocalLLMConfig, OpenAICompatibleLocalClient, plan_prompt
 
 
 def main() -> int:
@@ -22,7 +22,7 @@ def main() -> int:
             timeout_seconds=config.timeout_seconds,
         )
 
-    graph = plan_prompt(prompt)
+    graph = plan_prompt(prompt, client=OpenAICompatibleLocalClient(config))
     print(json.dumps(graph, ensure_ascii=False, indent=2))
     return 0
 
