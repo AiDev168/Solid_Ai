@@ -39,6 +39,14 @@ def test_compiler_binds_each_semantic_kind_to_a_capability():
     ]
 
 
+def test_profile_compiles_to_sketch_and_entity_operations():
+    compiled = compile_feature_graph(BRACKET_GRAPH)
+    operations = compiled.features[0].operations
+    assert [op.tool for op in operations] == ["create_sketch", "add_sketch_entity"]
+    assert operations[1].params["x1"] == pytest.approx(-0.06)
+    assert operations[1].params["y1"] == pytest.approx(-0.04)
+
+
 def test_compiler_keeps_m8_semantic_intent_without_inventing_drill_diameter():
     compiled = compile_feature_graph(BRACKET_GRAPH)
     operation = compiled.features[2].operations[0]
@@ -50,8 +58,8 @@ def test_compiler_normalizes_mm_dimensions_to_meters_at_backend_boundary():
     compiled = compile_feature_graph(BRACKET_GRAPH)
     profile = compiled.features[0].operations[0]
     base = compiled.features[1].operations[0]
-    assert profile.params["width_m"] == pytest.approx(0.12)
-    assert profile.params["height_m"] == pytest.approx(0.08)
+    assert profile.params["plane"] == "Top Plane"
+    assert compiled.features[0].operations[1].params["x2"] == pytest.approx(0.06)
     assert base.params["depth"] == pytest.approx(0.01)
 
 
