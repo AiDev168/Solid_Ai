@@ -91,8 +91,8 @@ def _rib(node: FeatureNode, capability: CapabilitySpec) -> CompiledFeature:
     params = dict(node.params)
     return CompiledFeature(node.feature_id, capability, (Operation(node.feature_id, capability.capability_id, capability.tool, {
         "rib_intent": True,
-        "height_m": _optional_mm(params.get("height")),
-        "thickness_m": _optional_mm(params.get("thickness")),
+        "height_mm": params.get("height_mm", params.get("height")),
+        "thickness_mm": params.get("thickness_mm", params.get("thickness")),
         "position": params.get("position"),
         "count": params.get("count", 1),
         "support_reference": params.get("support_reference"),
