@@ -26,6 +26,9 @@ class AiDesignerStackV1:
     recovery_controller_cls: Any
     recovery_registry_cls: Any
     topology_solver_cls: Any
+    semantic_recovery_coordinator_cls: Any
+    agentic_engineering_loop_cls: Any
+    execution_supervisor_cls: Any
     diagnosis_agent_cls: Any
     repair_agent_cls: Any
     agentic_engineering_loop_cls: Any
@@ -125,6 +128,9 @@ def load_stack() -> AiDesignerStackV1:
         topology_solver = importlib.import_module("ai_designer.recovery.topology_solver")
         diagnosis = importlib.import_module("ai_designer.diagnostics.diagnosis")
         repair = importlib.import_module("ai_designer.planning.execution_repair")
+        agentic_loop = importlib.import_module("ai_designer.agents.agentic_engineering_loop_v1")
+        recovery_coordinator = importlib.import_module("ai_designer.agentic.recovery_coordinator_v1")
+        supervisor = importlib.import_module("ai_designer.agentic.supervisor")
     except ImportError as exc:
         missing = getattr(exc, "name", None) or str(exc)
         raise AiDesignerCompositionError(
@@ -142,6 +148,9 @@ def load_stack() -> AiDesignerStackV1:
         recovery_controller_cls=recovery_controller.RecoveryController,
         recovery_registry_cls=recovery_registry.RecoverySolverRegistry,
         topology_solver_cls=topology_solver.TopologyRebindingRecoverySolver,
+        semantic_recovery_coordinator_cls=recovery_coordinator.AgenticRecoveryCoordinatorV1,
+        agentic_engineering_loop_cls=agentic_loop.AgenticEngineeringLoopV1,
+        execution_supervisor_cls=supervisor.AgenticExecutionSupervisor,
         diagnosis_agent_cls=diagnosis.DiagnosisAgent,
         repair_agent_cls=repair.ExecutionRepairAgent,
         agentic_engineering_loop_cls=agentic_loop.AgenticEngineeringLoopV1,
