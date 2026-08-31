@@ -81,10 +81,7 @@ def _map_benchmark_provider_env() -> None:
             "BENCHMARK_PROVIDER requires BENCHMARK_BASE_URL, BENCHMARK_MODEL and BENCHMARK_API_KEY"
         )
 
-    os.environ.setdefault("AIDESIGNER_LLM_BASE_URL", base_url)
-    os.environ.setdefault("AIDESIGNER_LLM_MODEL", model)
-    os.environ.setdefault("AIDESIGNER_LLM_API_KEY", api_key)
-
+    # BENCHMARK_* is authoritative for this composed runner. Do not preserve stale\n    # AIDESIGNER_LLM_* values from a previous LM Studio session.\n    os.environ["AIDESIGNER_LLM_BASE_URL"] = base_url\n    os.environ["AIDESIGNER_LLM_MODEL"] = model\n    os.environ["AIDESIGNER_LLM_API_KEY"] = api_key\n
 
 def _validate_llm_configuration() -> None:
     """Prevent accidental fallback to an unconfigured local LM Studio endpoint."""
