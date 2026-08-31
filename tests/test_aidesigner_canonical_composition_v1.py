@@ -41,6 +41,16 @@ def test_load_stack_requires_canonical_assets(monkeypatch):
 
     def add(name: str) -> types.ModuleType:
         module = types.ModuleType(name)
+        if name in {
+            "ai_designer",
+            "ai_designer.llm",
+            "ai_designer.engineering",
+            "ai_designer.recovery",
+            "ai_designer.diagnostics",
+            "ai_designer.planning",
+            "agentic",
+        }:
+            module.__path__ = []
         modules[name] = module
         monkeypatch.setitem(sys.modules, name, module)
         return module
@@ -110,6 +120,9 @@ def test_load_stack_requires_canonical_assets(monkeypatch):
         (agentic, "design_loop"),
         (recovery, "controller"),
         (recovery, "registry"),
+        (recovery, "topology_solver"),
+        (ai, "diagnostics"),
+        (ai, "planning"),
     ):
         setattr(parent, child.split(".")[-1], modules[f"{parent.__name__}.{child}"])
 
