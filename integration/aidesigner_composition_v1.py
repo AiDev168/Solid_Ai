@@ -50,6 +50,7 @@ def _bootstrap_source_tree() -> Path:
                 "Ai_Designer repository root (or AI_DESIGNER_SRC to its src directory)."
             )
         configured_path = sibling.resolve()
+
     candidates = [configured_path / "src", configured_path]
     source = next((item for item in candidates if (item / "ai_designer").is_dir()), None)
     if source is None:
@@ -57,7 +58,7 @@ def _bootstrap_source_tree() -> Path:
             f"Ai_Designer source tree not found under {configured_path}"
         )
 
-    # Ai_Designer has two relevant import roots on the current main layout:
+    # Ai_Designer has two relevant import roots on the current layout:
     # src/ contains the ai_designer package, while repo-root contains the
     # top-level agentic package used by the existing proven repair loop.
     roots = [str(configured_path), str(source)]
@@ -68,7 +69,7 @@ def _bootstrap_source_tree() -> Path:
 
 
 def _map_benchmark_provider_env() -> None:
-    """Reuse Ai_Designer canonical gateway while accepting BENCHMARK_* variables."""
+    """Map authoritative BENCHMARK_* settings to Ai_Designer's gateway settings."""
     provider = os.getenv("BENCHMARK_PROVIDER", "").strip().lower()
     if provider not in {"api-provider", "external"}:
         return
@@ -81,7 +82,16 @@ def _map_benchmark_provider_env() -> None:
             "BENCHMARK_PROVIDER requires BENCHMARK_BASE_URL, BENCHMARK_MODEL and BENCHMARK_API_KEY"
         )
 
-    # BENCHMARK_* is authoritative for this composed runner. Do not preserve stale\n    # AIDESIGNER_LLM_* values from a previous provider/session.\n    os.environ.update(\n        {\n            "AIDESIGNER_LLM_BASE_URL": base_url,\n            "AIDESIGNER_LLM_MODEL": model,\n            "AIDESIGNER_LLM_API_KEY": api_key,\n        }\n    )\n
+    # BENCHMARK_* is authoritative for this composed runner. Do not preserve
+    # stale AIDESIGNER_LLM_* values from a previous provider/session.
+    os.environ.update(
+        {
+            "AIDESIGNER_LLM_BASE_URL": base_url,
+            "AIDESIGNER_LLM_MODEL": model,
+            "AIDESIGNER_LLM_API_KEY": api_key,
+        }
+    )
+
 
 def _validate_llm_configuration() -> None:
     """Prevent accidental fallback to an unconfigured local LM Studio endpoint."""
@@ -110,15 +120,30 @@ def load_stack() -> AiDesignerStackV1:
     _bootstrap_source_tree()
     _map_benchmark_provider_env()
     _validate_llm_configuration()
+
     try:
         gateway = importlib.import_module("ai_designer.llm.gateway")
-        complex_pipeline = importlib.import_module("ai_designer.engineering.complex_engineering_pipeline_v1")
-        front_door = importlib.import_module("ai_designer.engineering.engineering_front_door_v1")
-        intake = importlib.import_module("ai_designer.engineering.engineering_intake_assessment_v1")
-        planning = importlib.import_module("ai_designer.engineering.requirements_planning_v2")
-        req_sp = importlib.import_module("ai_designer.engineering.requirements_solidpilot_v1")
-        agentic_loop = importlib.import_module("ai_designer.agents.agentic_engineering_loop_v1")
-        recovery_coordinator = importlib.import_module("ai_designer.agentic.recovery_coordinator_v1")
+        complex_pipeline = importlib.import_module(
+            "ai_designer.engineering.complex_engineering_pipeline_v1"
+        )
+        front_door = importlib.import_module(
+            "ai_designer.engineering.engineering_front_door_v1"
+        )
+        intake = importlib.import_module(
+            "ai_designer.engineering.engineering_intake_assessment_v1"
+        )
+        planning = importlib.import_module(
+            "ai_designer.engineering.requirements_planning_v2"
+        )
+        req_sp = importlib.import_module(
+            "ai_designer.engineering.requirements_solidpilot_v1"
+        )
+        agentic_loop = importlib.import_module(
+            "ai_designer.agents.agentic_engineering_loop_v1"
+        )
+        recovery_coordinator = importlib.import_module(
+            "ai_designer.agentic.recovery_coordinator_v1"
+        )
         supervisor = importlib.import_module("ai_designer.agentic.supervisor")
         recovery_controller = importlib.import_module("ai_designer.recovery.controller")
         recovery_registry = importlib.import_module("ai_designer.recovery.registry")
@@ -150,7 +175,6 @@ def load_stack() -> AiDesignerStackV1:
     )
 
 
-
 def build_canonical_gateway() -> Any:
     return load_stack().gateway_cls.from_environment()
 
@@ -163,14 +187,24 @@ def build_canonical_pipeline(*, solidpilot_base_url: str = "http://localhost:500
     return stack.complex_pipeline_cls(gateway, client)
 
 
-def prepare_and_plan(user_text: str, *, solidpilot_base_url: str = "http://localhost:5000", request_id: str | None = None) -> tuple[Any, Any]:
+def prepare_and_plan(
+    user_text: str,
+    *,
+    solidpilot_base_url: str = "http://localhost:5000",
+    request_id: str | None = None,
+) -> tuple[Any, Any]:
     pipeline = build_canonical_pipeline(solidpilot_base_url=solidpilot_base_url)
     request = pipeline.prepare(user_text, request_id=request_id)
     planning = pipeline.planner.plan(request)
     return request, planning
 
 
-def execute_canonical(user_text: str, *, solidpilot_base_url: str = "http://localhost:5000", operation_prefix: str = "AIDESIGNER-COMPOSED") -> Any:
+def execute_canonical(
+    user_text: str,
+    *,
+    solidpilot_base_url: str = "http://localhost:5000",
+    operation_prefix: str = "AIDESIGNER-COMPOSED",
+) -> Any:
     pipeline = build_canonical_pipeline(solidpilot_base_url=solidpilot_base_url)
     return pipeline.execute(user_text, operation_prefix=operation_prefix)
 
@@ -194,7 +228,15 @@ def _build_recovery_registry(stack: AiDesignerStackV1) -> Any:
     return registry
 
 
-def build_design_loop(*, compile_design: Any, execute_compiled: Any, verify_result: Any, diagnose: Any, repair: Any, validate_repair: Any) -> Any:
+def build_design_loop(
+    *,
+    compile_design: Any,
+    execute_compiled: Any,
+    verify_result: Any,
+    diagnose: Any,
+    repair: Any,
+    validate_repair: Any,
+) -> Any:
     stack = load_stack()
     return stack.design_loop_cls(
         compile_design=compile_design,
