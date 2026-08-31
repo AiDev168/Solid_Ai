@@ -4,6 +4,10 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from .aidesigner_assets import CapabilitySpec, get_capability
+from .feature_capability_registry_v1 import (
+    FeatureCapabilityRegistryV1,
+    build_default_feature_capability_registry,
+)
 from .feature_graph_v1 import FeatureGraph, FeatureNode
 
 
@@ -33,15 +37,6 @@ class CompiledFeature:
 class CompiledPlan:
     graph: FeatureGraph
     features: tuple[CompiledFeature, ...]
-
-
-_KIND_TO_CAPABILITY: dict[str, str] = {
-    "profile": "part.create_sketch",
-    "extrude_boss": "part.extrude_boss",
-    "hole_pattern": "part.hole",
-    "rib": "part.extrude_boss",
-    "fillet": "edge.fillet",
-}
 
 
 def _require_positive_number(value: Any, name: str) -> float:
@@ -106,6 +101,11 @@ def _holes(node: FeatureNode, capability: CapabilitySpec) -> CompiledFeature:
             "spacing_x_m": _optional_mm(params.get("spacing_x")),
             "spacing_y_m": _optional_mm(params.get("spacing_y")),
             "depth": params.get("depth", "through_all"),
+            "diameter_mm": params.get("diameter_mm"),
+            "support_face_index": params.get("support_face_index"),
+            "centers_mm": params.get("centers_mm"),
+            "through_depth_m": params.get("through_depth_m"),
+            "depth_m": params.get("depth_m"),
         }, phase="lower"),
     ))
 
@@ -134,7 +134,8 @@ def _fillet(node: FeatureNode, capability: CapabilitySpec) -> CompiledFeature:
     return CompiledFeature(node.feature_id, capability, (
         Operation(node.feature_id, capability.capability_id, capability.tool,
                   {"feature_type": "fillet", "radius_or_distance": radius_m,
-                   "selection_intent": selection}, phase="lower"),
+                   "selection_intent": selection,
+                   "edge_indices": params.get("edge_indices")}, phase="lower"),
     ))
 
 
@@ -148,12 +149,24 @@ _HANDLERS = {"profile": _profile, "extrude_boss": _extrude, "hole_pattern": _hol
              "rib": _rib, "fillet": _fillet}
 
 
-def compile_feature_graph(graph: FeatureGraph) -> CompiledPlan:
+def compile_feature_graph(
+    graph: FeatureGraph,
+    *,
+    capability_registry: FeatureCapabilityRegistryV1 | None = None,
+) -> CompiledPlan:
+    """Compile semantic features using only explicit registry bindings.
+
+    Adding a new feature kind requires registering an explicit semantic binding;
+    there is no fallback that maps unknown features to a merely similar tool.
+    """
+    registry = capability_registry or build_default_feature_capability_registry()
     compiled: list[CompiledFeature] = []
     for node in graph.features:
-        capability_id = _KIND_TO_CAPABILITY.get(node.kind)
+        capability_id = registry.capability_for(node.kind)
         if capability_id is None:
-            raise FeatureGraphCompileError(f"no capability mapping for semantic feature kind: {node.kind}")
+            raise FeatureGraphCompileError(
+                f"no explicit capability binding for semantic feature kind: {node.kind}"
+            )
         capability = get_capability(capability_id)
         if capability is None:
             raise FeatureGraphCompileError(f"capability registry missing: {capability_id}")
