@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
@@ -54,11 +53,7 @@ def _require_result_map(result: Any, tool: str) -> Mapping[str, Any]:
 
 
 class GenericFeatureGraphRuntimeV1:
-    """Execute a semantic FeatureGraph without feature-specific runtime classes.
-
-    The runtime owns orchestration only. Semantic references are resolved from
-    fresh SolidPilot evidence and materialized immediately before execution.
-    """
+    """Execute a semantic FeatureGraph without feature-specific runtime classes."""
 
     def __init__(self, session: Any):
         self.session = session
@@ -71,7 +66,7 @@ class GenericFeatureGraphRuntimeV1:
     async def _execute_operation(self, operation: Operation) -> OperationResult:
         return await self.executor.call(operation)
 
-    async def _execute_feature(self, feature: CompiledFeature) -> None:
+    async def _execute_feature(self, feature: CompiledFeature, dependencies: tuple[str, ...]) -> None:
         for operation in feature.operations:
             result = await self._execute_operation(operation)
             self.report.operations.append(result)
@@ -81,6 +76,12 @@ class GenericFeatureGraphRuntimeV1:
                 depth = operation.params.get("depth")
                 if isinstance(depth, (int, float)) and not isinstance(depth, bool) and depth > 0:
                     self._depths[feature.feature_id] = float(depth)
+        if feature.feature_id not in self._frames:
+            for dependency in dependencies:
+                frame = self._frames.get(dependency)
+                if frame is not None:
+                    self._frames[feature.feature_id] = frame
+                    break
         self.report.executed_features.append(feature.feature_id)
 
     def _capture_sketch_frame(self, feature_id: str, result: Any) -> None:
@@ -109,41 +110,35 @@ class GenericFeatureGraphRuntimeV1:
                 raise GenericFeatureGraphRuntimeError(
                     f"reference {request.reference_id}: no source extrusion depth for {producer}"
                 )
-            return await self.resolver.bind_extrude_end_face(
-                request,
-                source_frame=frame,
-                depth_m=depth,
-            )
+            return await self.resolver.bind_extrude_end_face(request, source_frame=frame, depth_m=depth)
         if request.kind == "edge" and request.role == "outer_extrusion_boundary":
             raw = request.criteria.get("bounds_uv_m")
             if not isinstance(raw, (list, tuple)) or len(raw) != 4:
                 raise GenericFeatureGraphRuntimeError(
                     f"reference {request.reference_id}: bounds_uv_m must be [umin,umax,vmin,vmax]"
                 )
-            bounds = tuple(float(value) for value in raw)
             return await self.resolver.bind_outer_extrusion_edges(
                 request,
                 source_frame=frame,
-                bounds_uv=bounds,  # type: ignore[arg-type]
+                bounds_uv=tuple(float(value) for value in raw),
             )
         raise GenericFeatureGraphRuntimeError(
             f"unsupported semantic reference role: {request.kind}/{request.role}"
         )
 
     async def _resolve_feature_references(self, feature: CompiledFeature) -> dict[str, ReferenceBinding]:
-        bindings: dict[str, ReferenceBinding] = {}
         operation_params = dict(feature.operations[0].params) if feature.operations else {}
-        refs = []
+        refs: list[Mapping[str, Any]] = []
         for key in ("support_reference", "selection_reference", "axis_reference"):
             value = operation_params.get(key)
             if isinstance(value, Mapping):
                 refs.append(value)
-            elif isinstance(value, str):
-                refs.append({"reference_id": value})
+        bindings: dict[str, ReferenceBinding] = {}
         for reference in refs:
-            if set(reference) == {"reference_id"}:
+            required = {"reference_id", "kind", "role", "feature_id"}
+            if not required.issubset(reference):
                 raise GenericFeatureGraphRuntimeError(
-                    f"reference {reference['reference_id']}: incomplete reference descriptor"
+                    f"incomplete semantic reference descriptor: {reference}"
                 )
             binding = await self._bind_reference(reference)
             bindings[binding.reference_id] = binding
@@ -154,24 +149,23 @@ class GenericFeatureGraphRuntimeV1:
         try:
             compiled = compile_feature_graph(graph)
             await self.executor.prepare()
-
             nodes = {node.feature_id: node for node in graph.features}
             compiled_by_id = {feature.feature_id: feature for feature in compiled.features}
             ordered = _topological_features(graph)
 
             for feature_id in ordered:
                 feature = compiled_by_id[feature_id]
-                if any(
-                    isinstance(feature.operations[0].params.get(key), (Mapping, str))
+                refs_exist = any(
+                    isinstance(feature.operations[0].params.get(key), Mapping)
                     for key in ("support_reference", "selection_reference", "axis_reference")
-                ):
+                ) if feature.operations else False
+                if refs_exist:
                     bindings = await self._resolve_feature_references(feature)
-                    resolved_plan = materialize_plan(
+                    feature = materialize_plan(
                         CompiledPlan(graph=graph, features=(feature,)),
                         bindings,
-                    )
-                    feature = resolved_plan.features[0]
-                await self._execute_feature(feature)
+                    ).features[0]
+                await self._execute_feature(feature, nodes[feature_id].depends_on)
 
             evidence = parse_solidpilot_result(
                 await self.session.call_tool("analyze_model", {"analysis_type": "geometry"})
