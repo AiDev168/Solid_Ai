@@ -1,4 +1,4 @@
-"""Standalone integration layer for proven Ai_Designer CAD assets."""
+"""Solid_Ai integration boundaries for proven engineering assets."""
 
 from .aidesigner_assets import (
     CAPABILITIES,
@@ -9,6 +9,18 @@ from .aidesigner_assets import (
     lower_fillet,
     lower_hole,
     require_capability,
+)
+from .aidesigner_composition_v1 import (
+    AiDesignerCompositionError,
+    AiDesignerStackV1,
+    build_canonical_gateway,
+    build_canonical_pipeline,
+    build_design_loop,
+    build_deterministic_recovery_controller,
+    build_llm_recovery_coordinator,
+    execute_canonical,
+    load_stack,
+    prepare_and_plan,
 )
 from .recovery_assets import (
     FailureDiagnosis,
@@ -42,6 +54,16 @@ from .reference_resolution_v1 import (
 __all__ = [
     "CAPABILITIES",
     "CapabilitySpec",
+    "AiDesignerCompositionError",
+    "AiDesignerStackV1",
+    "build_canonical_gateway",
+    "build_canonical_pipeline",
+    "build_design_loop",
+    "build_deterministic_recovery_controller",
+    "build_llm_recovery_coordinator",
+    "execute_canonical",
+    "load_stack",
+    "prepare_and_plan",
     "FailureDiagnosis",
     "RecoveryAssets",
     "RecoveryController",

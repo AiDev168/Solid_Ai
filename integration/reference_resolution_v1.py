@@ -142,11 +142,21 @@ def _score_face(intent: ReferenceIntent, candidate: Mapping[str, Any]) -> float 
     return math.dist(point, intent.target_xyz)
 
 
-def _in_bounds(point: tuple[float, float, float], bounds: Sequence[float] | None, tolerance: float = 1e-8) -> bool:
+def _on_plan_boundary(
+    start: tuple[float, float, float],
+    end: tuple[float, float, float],
+    bounds: Sequence[float] | None,
+    tolerance: float = 1e-8,
+) -> bool:
     if not bounds or len(bounds) != 4:
         return True
     xmin, xmax, ymin, ymax = map(float, bounds)
-    return xmin - tolerance <= point[0] <= xmax + tolerance and ymin - tolerance <= point[1] <= ymax + tolerance
+    return (
+        (abs(start[0] - xmin) <= tolerance and abs(end[0] - xmin) <= tolerance)
+        or (abs(start[0] - xmax) <= tolerance and abs(end[0] - xmax) <= tolerance)
+        or (abs(start[1] - ymin) <= tolerance and abs(end[1] - ymin) <= tolerance)
+        or (abs(start[1] - ymax) <= tolerance and abs(end[1] - ymax) <= tolerance)
+    )
 
 
 def _score_edge(intent: ReferenceIntent, candidate: Mapping[str, Any]) -> float | None:
@@ -161,7 +171,9 @@ def _score_edge(intent: ReferenceIntent, candidate: Mapping[str, Any]) -> float 
         if dz <= max(dx, dy) or dz <= 1e-9:
             return None
         midpoint = _point(candidate)
-        if midpoint is None or not _in_bounds(midpoint, (intent.criteria or {}).get("outer_bounds_m")):
+        if midpoint is None:
+            return None
+        if not _on_plan_boundary(start, end, (intent.criteria or {}).get("outer_bounds_m")):
             return None
         if intent.role == "outer_vertical":
             if intent.target_xyz is None:
@@ -188,11 +200,14 @@ def resolve_reference(intent: ReferenceIntent, evidence: ReferenceEvidence) -> R
             scored.append((score, candidate))
     if not scored:
         raise ReferenceResolutionError(f"no candidate satisfies reference role={intent.role} kind={intent.kind}")
-    scored.sort(key=lambda item: (item[0], int(item[1]["backend_index"])))
+    scored.sort(key=lambda item: (item[0], _index(item[1]) if _index(item[1]) is not None else float("inf")))
     best_score, best = scored[0]
+    best_index = _index(best)
+    if best_index is None:
+        raise ReferenceResolutionError(f"candidate for reference {intent.reference_id} has no backend index")
     if len(scored) > 1 and abs(scored[1][0] - best_score) <= 1e-9:
         raise ReferenceResolutionError(f"ambiguous reference {intent.reference_id}: multiple candidates have equal score")
-    return ReferenceBinding(intent.reference_id, evidence.kind, int(best["backend_index"]), evidence.state_version, dict(best), best_score)
+    return ReferenceBinding(intent.reference_id, evidence.kind, best_index, evidence.state_version, dict(best), best_score)
 
 
 def resolve_reference_set(intent: ReferenceIntent, evidence: ReferenceEvidence) -> ReferenceSetBinding:
@@ -205,11 +220,11 @@ def resolve_reference_set(intent: ReferenceIntent, evidence: ReferenceEvidence) 
             scored.append((score, candidate))
     if not scored:
         raise ReferenceResolutionError(f"no candidates satisfy reference role={intent.role} kind={intent.kind}")
-    scored.sort(key=lambda item: int(item[1]["backend_index"]))
+    scored.sort(key=lambda item: _index(item[1]) if _index(item[1]) is not None else float("inf"))
     return ReferenceSetBinding(
         intent.reference_id,
         evidence.kind,
-        tuple(ReferenceBinding(intent.reference_id, evidence.kind, int(candidate["backend_index"]), evidence.state_version, dict(candidate), score) for score, candidate in scored),
+        tuple(ReferenceBinding(intent.reference_id, evidence.kind, _index(candidate), evidence.state_version, dict(candidate), score) for score, candidate in scored),
         evidence.state_version,
     )
 
