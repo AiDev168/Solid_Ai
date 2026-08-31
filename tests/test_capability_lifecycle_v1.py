@@ -20,7 +20,7 @@ def test_rib_is_explicit_candidate_and_never_aliases_extrude_boss():
     assert binding.capability.tool == "create_rib"
 
 
-def test_revolve_compiles_only_with_explicit_axis_endpoints():
+def test_revolve_compiles_only_with_explicit_axis_endpoints_and_normalizes_units():
     graph = feature_graph_from_dict({
         "schema": "solid-ai.feature-graph.v1",
         "part_id": "shaft",
@@ -37,8 +37,10 @@ def test_revolve_compiles_only_with_explicit_axis_endpoints():
     op = compiled.features[0].operations[0]
     assert op.capability_id == "part.revolve"
     assert op.params["feature_type"] == "revolve"
-    assert op.params["axis_x2"] == 0.0
-    assert op.params["axis_y2"] == 120.0
+    assert op.params["axis_x1"] == pytest.approx(0.0)
+    assert op.params["axis_y1"] == pytest.approx(0.0)
+    assert op.params["axis_x2"] == pytest.approx(0.0)
+    assert op.params["axis_y2"] == pytest.approx(0.12)
 
 
 def test_revolve_rejects_missing_axis_instead_of_guessing():
