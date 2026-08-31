@@ -142,11 +142,21 @@ def _score_face(intent: ReferenceIntent, candidate: Mapping[str, Any]) -> float 
     return math.dist(point, intent.target_xyz)
 
 
-def _in_bounds(point: tuple[float, float, float], bounds: Sequence[float] | None, tolerance: float = 1e-8) -> bool:
+def _on_plan_boundary(
+    start: tuple[float, float, float],
+    end: tuple[float, float, float],
+    bounds: Sequence[float] | None,
+    tolerance: float = 1e-8,
+) -> bool:
     if not bounds or len(bounds) != 4:
         return True
     xmin, xmax, ymin, ymax = map(float, bounds)
-    return xmin - tolerance <= point[0] <= xmax + tolerance and ymin - tolerance <= point[1] <= ymax + tolerance
+    return (
+        (abs(start[0] - xmin) <= tolerance and abs(end[0] - xmin) <= tolerance)
+        or (abs(start[0] - xmax) <= tolerance and abs(end[0] - xmax) <= tolerance)
+        or (abs(start[1] - ymin) <= tolerance and abs(end[1] - ymin) <= tolerance)
+        or (abs(start[1] - ymax) <= tolerance and abs(end[1] - ymax) <= tolerance)
+    )
 
 
 def _score_edge(intent: ReferenceIntent, candidate: Mapping[str, Any]) -> float | None:
@@ -161,7 +171,9 @@ def _score_edge(intent: ReferenceIntent, candidate: Mapping[str, Any]) -> float 
         if dz <= max(dx, dy) or dz <= 1e-9:
             return None
         midpoint = _point(candidate)
-        if midpoint is None or not _in_bounds(midpoint, (intent.criteria or {}).get("outer_bounds_m")):
+        if midpoint is None:
+            return None
+        if not _on_plan_boundary(start, end, (intent.criteria or {}).get("outer_bounds_m")):
             return None
         if intent.role == "outer_vertical":
             if intent.target_xyz is None:
