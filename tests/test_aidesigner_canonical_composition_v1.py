@@ -186,3 +186,19 @@ def test_llm_configuration_allows_explicit_lmstudio_fallback(monkeypatch):
     monkeypatch.setenv("SOLID_AI_ALLOW_LMSTUDIO", "1")
 
     bridge._validate_llm_configuration()
+
+
+def test_benchmark_provider_overwrites_stale_aidesigner_provider(monkeypatch):
+    monkeypatch.setenv("BENCHMARK_PROVIDER", "api-provider")
+    monkeypatch.setenv("BENCHMARK_BASE_URL", "https://api.gapgpt.app/v1")
+    monkeypatch.setenv("BENCHMARK_MODEL", "gapgpt-qwen-3.5")
+    monkeypatch.setenv("BENCHMARK_API_KEY", "secret")
+    monkeypatch.setenv("AIDESIGNER_LLM_BASE_URL", "http://127.0.0.1:1234/v1")
+    monkeypatch.setenv("AIDESIGNER_LLM_MODEL", "stale-local-model")
+    monkeypatch.setenv("AIDESIGNER_LLM_API_KEY", "stale")
+
+    bridge._map_benchmark_provider_env()
+
+    assert os.environ["AIDESIGNER_LLM_BASE_URL"] == "https://api.gapgpt.app/v1"
+    assert os.environ["AIDESIGNER_LLM_MODEL"] == "gapgpt-qwen-3.5"
+    assert os.environ["AIDESIGNER_LLM_API_KEY"] == "secret"
