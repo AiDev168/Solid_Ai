@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any, Callable, Mapping
+from typing import Callable, Mapping, Any
 
 from .feature_graph_compiler_v1 import CompiledFeature, CompiledPlan, Operation
 
@@ -14,7 +14,13 @@ Lowerer = Callable[[CompiledFeature], CompiledFeature]
 
 
 class FeatureGraphLoweringRegistryV1:
-    """Explicit semantic-to-executable lowering registry."""
+    """Explicit semantic-to-executable lowering registry.
+
+    A registered lowerer may only use information already present in the
+    semantic feature or explicitly resolved backend data. It must never infer
+    an engineering quantity merely because a backend tool happens to accept
+    one.
+    """
 
     def __init__(self) -> None:
         self._lowerers: dict[str, Lowerer] = {}
@@ -43,7 +49,10 @@ class FeatureGraphLoweringRegistryV1:
         return lowered
 
     def lower_plan(self, plan: CompiledPlan) -> CompiledPlan:
-        return replace(plan, features=tuple(self.lower_feature(feature) for feature in plan.features))
+        return replace(
+            plan,
+            features=tuple(self.lower_feature(feature) for feature in plan.features),
+        )
 
 
 def _explicit_dimension_mm(params: Mapping[str, Any], key: str) -> float:
@@ -56,35 +65,50 @@ def _explicit_dimension_mm(params: Mapping[str, Any], key: str) -> float:
 def _explicit_depth_m(params: Mapping[str, Any]) -> float:
     value = params.get("depth_m")
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
-        raise FeatureGraphLoweringError("hole_pattern requires explicit depth_m when through_all is not used")
+        raise FeatureGraphLoweringError(
+            "hole_pattern requires explicit depth_m when through_all is not used"
+        )
     return float(value)
 
 
-def _explicit_support_face(params: Mapping[str, Any]) -> int:
-    value = params.get("support_face_index")
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise FeatureGraphLoweringError(
-            "hole_pattern requires an explicitly resolved non-negative support_face_index"
-        )
-    return value
+def _circle_radius_from_diameter_mm(params: Mapping[str, Any]) -> float:
+    diameter_m = _explicit_dimension_mm(params, "diameter_mm")
+    radius_m = diameter_m / 2.0
+    if radius_m <= 0:
+        raise FeatureGraphLoweringError("circle radius must be positive")
+    return radius_m
 
 
 def lower_hole_pattern(feature: CompiledFeature) -> CompiledFeature:
-    """Lower a hole pattern only with explicit diameter, support and centers."""
+    """Lower a hole pattern only when backend-ready geometric inputs are explicit.
+
+    Nominal values such as M8 remain semantic intent. This layer does not
+    convert fastener designations into drill sizes.
+    """
     source = dict(feature.operations[0].params)
-    diameter_m = _explicit_dimension_mm(source, "diameter_mm")
-    support_face_index = _explicit_support_face(source)
+    radius_m = _circle_radius_from_diameter_mm(source)
     centers = source.get("centers_mm")
+    support_face_index = source.get("support_face_index")
     if not isinstance(centers, (list, tuple)) or not centers:
-        raise FeatureGraphLoweringError(f"{feature.feature_id}: hole_pattern requires explicit centers_mm")
+        raise FeatureGraphLoweringError(
+            f"{feature.feature_id}: hole_pattern requires explicit centers_mm"
+        )
+    if isinstance(support_face_index, bool) or not isinstance(support_face_index, int) or support_face_index < 0:
+        raise FeatureGraphLoweringError(
+            f"{feature.feature_id}: hole_pattern requires a resolved support_face_index"
+        )
 
     normalized: list[tuple[float, float]] = []
     for item in centers:
         if not isinstance(item, (list, tuple)) or len(item) != 2:
-            raise FeatureGraphLoweringError(f"{feature.feature_id}: each centers_mm entry must be [x,y]")
+            raise FeatureGraphLoweringError(
+                f"{feature.feature_id}: each centers_mm entry must be [x,y]"
+            )
         x, y = item
         if not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in (x, y)):
-            raise FeatureGraphLoweringError(f"{feature.feature_id}: hole center coordinates must be numeric")
+            raise FeatureGraphLoweringError(
+                f"{feature.feature_id}: hole center coordinates must be numeric"
+            )
         normalized.append((float(x) / 1000.0, float(y) / 1000.0))
 
     create = Operation(
@@ -99,7 +123,7 @@ def lower_hole_pattern(feature: CompiledFeature) -> CompiledFeature:
             feature.feature_id,
             feature.capability.capability_id,
             "add_sketch_entity",
-            {"entity_type": "circle", "cx": x, "cy": y, "radius": diameter_m},
+            {"entity_type": "circle", "cx": x, "cy": y, "radius": radius_m},
             phase="execute",
         )
         for x, y in normalized
@@ -115,10 +139,11 @@ def lower_hole_pattern(feature: CompiledFeature) -> CompiledFeature:
         "mid_plane": False,
     }
     if through:
-        depth = source.get("through_depth_m")
-        if isinstance(depth, bool) or not isinstance(depth, (int, float)) or depth <= 0:
-            raise FeatureGraphLoweringError(f"{feature.feature_id}: through_all requires explicit through_depth_m")
-        cut_params["depth"] = float(depth)
+        cut_params["depth"] = source.get("through_depth_m")
+        if not isinstance(cut_params["depth"], (int, float)) or isinstance(cut_params["depth"], bool) or cut_params["depth"] <= 0:
+            raise FeatureGraphLoweringError(
+                f"{feature.feature_id}: through_all requires explicit through_depth_m"
+            )
     else:
         cut_params["depth"] = _explicit_depth_m(source)
 
@@ -137,15 +162,21 @@ def lower_fillet(feature: CompiledFeature) -> CompiledFeature:
     source = dict(feature.operations[0].params)
     raw_edges = source.get("edge_indices")
     if not isinstance(raw_edges, (list, tuple)) or not raw_edges:
-        raise FeatureGraphLoweringError(f"{feature.feature_id}: fillet requires explicitly resolved edge_indices")
+        raise FeatureGraphLoweringError(
+            f"{feature.feature_id}: fillet requires explicitly resolved edge_indices"
+        )
     edge_indices: list[int] = []
     for value in raw_edges:
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise FeatureGraphLoweringError(f"{feature.feature_id}: edge_indices must contain non-negative integers")
+            raise FeatureGraphLoweringError(
+                f"{feature.feature_id}: edge_indices must contain non-negative integers"
+            )
         edge_indices.append(value)
     radius_m = source.get("radius_or_distance")
     if isinstance(radius_m, bool) or not isinstance(radius_m, (int, float)) or radius_m <= 0:
-        raise FeatureGraphLoweringError(f"{feature.feature_id}: radius_or_distance must be explicit and positive")
+        raise FeatureGraphLoweringError(
+            f"{feature.feature_id}: radius_or_distance must be explicit and positive"
+        )
     operation = Operation(
         feature.feature_id,
         feature.capability.capability_id,
