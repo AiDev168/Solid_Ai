@@ -152,3 +152,35 @@ def test_load_stack_requires_canonical_assets(monkeypatch):
     assert stack.agentic_engineering_loop_cls is AgenticLoop
     assert stack.agentic_recovery_coordinator_cls is RecoveryCoordinator
     assert stack.execution_supervisor_cls is Supervisor
+
+
+def test_llm_configuration_requires_explicit_provider(monkeypatch):
+    for key in (
+        "AIDESIGNER_LLM_BASE_URL",
+        "AIDESIGNER_LLM_MODEL",
+        "AIDESIGNER_LLM_API_KEY",
+        "BENCHMARK_PROVIDER",
+        "BENCHMARK_BASE_URL",
+        "BENCHMARK_MODEL",
+        "BENCHMARK_API_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("SOLID_AI_ALLOW_LMSTUDIO", raising=False)
+
+    with pytest.raises(
+        bridge.AiDesignerCompositionError,
+        match="No canonical external LLM is configured",
+    ):
+        bridge._validate_llm_configuration()
+
+
+def test_llm_configuration_allows_explicit_lmstudio_fallback(monkeypatch):
+    for key in (
+        "AIDESIGNER_LLM_BASE_URL",
+        "AIDESIGNER_LLM_MODEL",
+        "AIDESIGNER_LLM_API_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("SOLID_AI_ALLOW_LMSTUDIO", "1")
+
+    bridge._validate_llm_configuration()
