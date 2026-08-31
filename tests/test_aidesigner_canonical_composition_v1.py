@@ -56,6 +56,7 @@ def test_load_stack_requires_canonical_assets(monkeypatch):
         return module
 
     ai = add("ai_designer")
+    agents = add("ai_designer.agents")
     llm = add("ai_designer.llm")
     gateway = add("ai_designer.llm.gateway")
     engineering = add("ai_designer.engineering")
