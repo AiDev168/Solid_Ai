@@ -91,3 +91,19 @@ def test_set_reference_is_not_collapsed_to_one_backend_index():
     )
     binding = resolve_reference_set(ReferenceIntent("set", "edge", "all_outer_vertical"), evidence)
     assert json.loads(edge_indices_json(binding)) == [1, 2]
+
+
+def test_direct_reference_evidence_normalizes_backend_aliases_at_resolver_boundary():
+    evidence = ReferenceEvidence(
+        "edge",
+        (
+            {"index": 11, "start": [0, 0, 0], "end": [0, 0, 0.01], "mid": [0, 0, 0.005]},
+        ),
+        21,
+    )
+    binding = resolve_reference(
+        ReferenceIntent("edge", "edge", "nearest", target_xyz=(0, 0, 0.005)),
+        evidence,
+    )
+    assert binding.backend_index == 11
+    assert json.loads(edge_indices_json(binding)) == [11]
