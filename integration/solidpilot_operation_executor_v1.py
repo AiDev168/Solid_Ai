@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, Protocol
 
 from .feature_graph_compiler_v1 import CompiledPlan, Operation
+from .solidpilot_capability_catalog_v1 import SolidPilotCapabilityCatalogV1
 
 
 class SolidPilotExecutionError(RuntimeError):
@@ -59,14 +60,21 @@ def parse_solidpilot_result(response: Any) -> Any:
 class SolidPilotOperationExecutor:
     """Execute compiled operations through the real SolidPilot MCP session.
 
-    This adapter deliberately contains no LLM reasoning and no semantic
-    feature selection. The compiler decides what may execute; reference and
-    recovery layers remain responsible for resolving semantic selectors.
+    The executor has no semantic feature selection or LLM logic. A capability
+    must be proven in the capability catalog before its operation can cross the
+    MCP boundary.
     """
 
-    def __init__(self, session: AsyncToolSession, *, auto_prepare: bool = True):
+    def __init__(
+        self,
+        session: AsyncToolSession,
+        *,
+        auto_prepare: bool = True,
+        capability_catalog: SolidPilotCapabilityCatalogV1 | None = None,
+    ):
         self.session = session
         self.auto_prepare = auto_prepare
+        self.capability_catalog = capability_catalog or SolidPilotCapabilityCatalogV1()
         self.report = SolidPilotExecutionReport()
 
     async def call(self, operation: Operation) -> OperationResult:
@@ -74,6 +82,12 @@ class SolidPilotOperationExecutor:
             raise SolidPilotExecutionError(
                 f"UNLOWERED_OPERATION: {operation.feature_id}/{operation.tool} has phase={operation.phase}"
             )
+        try:
+            self.capability_catalog.require_proven(operation.capability_id)
+        except (KeyError, ValueError) as exc:
+            raise SolidPilotExecutionError(
+                f"CAPABILITY_NOT_PROVEN: {operation.capability_id} cannot cross MCP boundary"
+            ) from exc
         response = await self.session.call_tool(operation.tool, dict(operation.params))
         result = parse_solidpilot_result(response)
         if not isinstance(result, Mapping):
