@@ -34,7 +34,11 @@ separate promotion policy
 
 ## Current representative scenarios
 
-The catalog currently includes representative probes for cut, pattern, sketch entities, sketch constraints, reference geometry, chamfer, loft, and sweep. The first live batch should prioritize scenarios with complete prerequisites: blind cut and connected sketch geometry. Pattern, constraint, reference, loft, and sweep scenarios require richer setup plans before they can be treated as valid live qualifications.
+The catalog currently includes representative probes for cut, pattern, sketch entities, sketch constraints, reference geometry, chamfer, loft, and sweep.
+
+`Q-CUT-001` is now a complete executable qualification scenario: it first creates a solid body, then creates a supported sketch on that body, then performs the cut. This prevents a missing-solid precondition from being mistaken for a capability failure. The scenario still verifies body preservation and volume decrease.
+
+Pattern, constraint, reference, loft, and sweep scenarios remain catalog entries but require richer setup plans before they can be treated as valid live qualifications.
 
 ## Promotion
 
