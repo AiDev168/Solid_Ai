@@ -26,11 +26,17 @@ def test_hole_materializes_semantic_support_to_bound_face():
     cap = get_capability("part.hole")
     feature = CompiledFeature(
         "holes", cap,
-        (Operation("holes", cap.capability_id, "create_sketch", {
+        (Operation("holes", cap.capability_id, "extrude_feature", {
+            "hole_intent": "M8",
+            "count": 1,
+            "diameter_mm": 8.0,
+            "centers_mm": [[0, 0]],
+            "depth": "through_all",
+            "through_depth_m": 0.01,
             "support_reference": "base_end_face",
         }, phase="lower"),),
     )
-    lowered = __import__("integration.semantic_reference_lowering_v1", fromlist=["materialize_hole_pattern"]).materialize_hole_pattern(
+    lowered = materialize_hole_pattern(
         feature, {"base_end_face": binding("base_end_face", "face", 7)}
     )
     assert lowered.operations[0].phase == "execute"
@@ -41,7 +47,13 @@ def test_hole_rejects_unbound_semantic_support():
     cap = get_capability("part.hole")
     feature = CompiledFeature(
         "holes", cap,
-        (Operation("holes", cap.capability_id, "create_sketch", {
+        (Operation("holes", cap.capability_id, "extrude_feature", {
+            "hole_intent": "M8",
+            "count": 1,
+            "diameter_mm": 8.0,
+            "centers_mm": [[0, 0]],
+            "depth": "through_all",
+            "through_depth_m": 0.01,
             "support_reference": "base_end_face",
         }, phase="lower"),),
     )
