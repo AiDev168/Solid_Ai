@@ -188,11 +188,14 @@ def resolve_reference(intent: ReferenceIntent, evidence: ReferenceEvidence) -> R
             scored.append((score, candidate))
     if not scored:
         raise ReferenceResolutionError(f"no candidate satisfies reference role={intent.role} kind={intent.kind}")
-    scored.sort(key=lambda item: (item[0], int(item[1]["backend_index"])))
+    scored.sort(key=lambda item: (item[0], _index(item[1]) if _index(item[1]) is not None else float("inf")))
     best_score, best = scored[0]
+    best_index = _index(best)
+    if best_index is None:
+        raise ReferenceResolutionError(f"candidate for reference {intent.reference_id} has no backend index")
     if len(scored) > 1 and abs(scored[1][0] - best_score) <= 1e-9:
         raise ReferenceResolutionError(f"ambiguous reference {intent.reference_id}: multiple candidates have equal score")
-    return ReferenceBinding(intent.reference_id, evidence.kind, int(best["backend_index"]), evidence.state_version, dict(best), best_score)
+    return ReferenceBinding(intent.reference_id, evidence.kind, best_index, evidence.state_version, dict(best), best_score)
 
 
 def resolve_reference_set(intent: ReferenceIntent, evidence: ReferenceEvidence) -> ReferenceSetBinding:
@@ -205,11 +208,11 @@ def resolve_reference_set(intent: ReferenceIntent, evidence: ReferenceEvidence) 
             scored.append((score, candidate))
     if not scored:
         raise ReferenceResolutionError(f"no candidates satisfy reference role={intent.role} kind={intent.kind}")
-    scored.sort(key=lambda item: int(item[1]["backend_index"]))
+    scored.sort(key=lambda item: _index(item[1]) if _index(item[1]) is not None else float("inf"))
     return ReferenceSetBinding(
         intent.reference_id,
         evidence.kind,
-        tuple(ReferenceBinding(intent.reference_id, evidence.kind, int(candidate["backend_index"]), evidence.state_version, dict(candidate), score) for score, candidate in scored),
+        tuple(ReferenceBinding(intent.reference_id, evidence.kind, _index(candidate), evidence.state_version, dict(candidate), score) for score, candidate in scored),
         evidence.state_version,
     )
 
