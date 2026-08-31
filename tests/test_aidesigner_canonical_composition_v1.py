@@ -68,7 +68,9 @@ def test_load_stack_requires_canonical_assets(monkeypatch):
     )
     engineering_modules = {name: add(f"ai_designer.engineering.{name}") for name in names}
     agentic = add("agentic")
-    design_loop = add("agentic.design_loop")
+    agentic_loop = add("ai_designer.agents.agentic_engineering_loop_v1")
+    recovery_coordinator = add("ai_designer.agentic.recovery_coordinator_v1")
+    supervisor = add("ai_designer.agentic.supervisor")
     recovery = add("ai_designer.recovery")
     recovery_controller = add("ai_designer.recovery.controller")
     recovery_registry = add("ai_designer.recovery.registry")
@@ -77,7 +79,6 @@ def test_load_stack_requires_canonical_assets(monkeypatch):
     diagnostics = add("ai_designer.diagnostics")
     planning = add("ai_designer.planning")
     repair = add("ai_designer.planning.execution_repair")
-    legacy = add("agentic.legacy_repair_bridge")
 
     class LLMGateway: pass
     class ComplexPipeline: pass
@@ -85,7 +86,9 @@ def test_load_stack_requires_canonical_assets(monkeypatch):
     class Intake: pass
     class Planning: pass
     class ReqSP: pass
-    class DesignLoop: pass
+    class AgenticLoop: pass
+    class RecoveryCoordinator: pass
+    class Supervisor: pass
     class RecoveryController: pass
     class RecoveryRegistry: pass
     class TopologySolver: pass
@@ -99,7 +102,9 @@ def test_load_stack_requires_canonical_assets(monkeypatch):
     engineering_modules["engineering_intake_assessment_v1"].EngineeringIntakeAssessorV1 = Intake
     engineering_modules["requirements_planning_v2"].RequirementsPlanningV2 = Planning
     engineering_modules["requirements_solidpilot_v1"].RequirementsSolidPilotV1 = ReqSP
-    design_loop.DesignIntegrationLoop = DesignLoop
+    agentic_loop.AgenticEngineeringLoopV1 = AgenticLoop
+    recovery_coordinator.AgenticRecoveryCoordinatorV1 = RecoveryCoordinator
+    supervisor.AgenticExecutionSupervisor = Supervisor
     recovery_controller.RecoveryController = RecoveryController
     recovery_registry.RecoverySolverRegistry = RecoveryRegistry
     topology.TopologyRebindingRecoverySolver = TopologySolver
@@ -117,12 +122,15 @@ def test_load_stack_requires_canonical_assets(monkeypatch):
         (engineering, "engineering_intake_assessment_v1"),
         (engineering, "requirements_planning_v2"),
         (engineering, "requirements_solidpilot_v1"),
-        (agentic, "design_loop"),
+        (agentic, "recovery_coordinator_v1"),
+        (agentic, "supervisor"),
+        (ai, "agents"),
         (recovery, "controller"),
         (recovery, "registry"),
         (recovery, "topology_solver"),
         (ai, "diagnostics"),
         (ai, "planning"),
+        (modules["ai_designer.agents"], "agentic_engineering_loop_v1"),
     ):
         setattr(parent, child.split(".")[-1], modules[f"{parent.__name__}.{child}"])
 
@@ -135,10 +143,12 @@ def test_load_stack_requires_canonical_assets(monkeypatch):
     assert stack.complex_pipeline_cls is ComplexPipeline
     assert stack.requirements_planning_cls is Planning
     assert stack.requirements_solidpilot_cls is ReqSP
-    assert stack.design_loop_cls is DesignLoop
+    assert stack.design_loop_cls is Supervisor
     assert stack.recovery_controller_cls is RecoveryController
     assert stack.recovery_registry_cls is RecoveryRegistry
     assert stack.topology_solver_cls is TopologySolver
     assert stack.diagnosis_agent_cls is Diagnosis
     assert stack.repair_agent_cls is Repair
-    assert stack.legacy_repair_bridge_cls is Legacy
+    assert stack.agentic_engineering_loop_cls is AgenticLoop
+    assert stack.agentic_recovery_coordinator_cls is RecoveryCoordinator
+    assert stack.execution_supervisor_cls is Supervisor
