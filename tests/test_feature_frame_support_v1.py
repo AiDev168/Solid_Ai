@@ -1,7 +1,6 @@
 import pytest
 
 from integration.support_reference_v1 import (
-    SketchFrame,
     SupportReferenceError,
     frame_from_sketch_result,
     resolve_extrude_end_face,
@@ -70,3 +69,19 @@ def test_extrude_end_face_is_fail_closed_on_ambiguity():
             state_version=4,
             tolerance_m=0.02,
         )
+
+
+def test_extrusion_boundary_edges_ignore_degenerate_zero_length_edges():
+    frame = top_plane_frame()
+    edges = (
+        {"i": 1, "start": [-0.06, 0, -0.04], "end": [-0.06, 0, -0.04], "mid": [-0.06, 0, -0.04]},
+        {"i": 2, "start": [0.06, 0, 0.04], "end": [0.06, 0.01, 0.04], "mid": [0.06, 0.005, 0.04]},
+    )
+    result = resolve_extrusion_boundary_edges(
+        edges,
+        frame=frame,
+        bounds_uv=(-0.06, 0.06, -0.04, 0.04),
+        reference_id="outer",
+        state_version=10,
+    )
+    assert [item["backend_index"] for item in result] == [2]
