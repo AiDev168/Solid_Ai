@@ -103,7 +103,9 @@ def load_stack() -> AiDesignerStackV1:
         repair = importlib.import_module("ai_designer.planning.execution_repair")
         legacy_bridge = importlib.import_module("agentic.legacy_repair_bridge")
     except ImportError as exc:
-        raise AiDesignerCompositionError("A canonical Ai_Designer component could not be imported") from exc
+        raise AiDesignerCompositionError(
+            f"Could not import canonical Ai_Designer component: {exc.name or exc}; {exc}"
+        ) from exc
 
     return AiDesignerStackV1(
         gateway_cls=gateway.LLMGateway,
