@@ -1,7 +1,10 @@
+import json
+
 from integration.recovery_assets import (
     RecoveryAssets,
     RecoveryRequest,
     TopologyRecoveryEvidence,
+    TopologyRecoverySolver,
     make_anchor,
     normalize_runtime_failure,
     diagnose_failure,
@@ -22,6 +25,20 @@ def test_runtime_failure_maps_edge_face_and_axis():
             return "Error: {'error': {'code': 'EDGE_NOT_FOUND', 'message': 'missing'}}"
 
     assert normalize_runtime_failure(E()).code == "STALE_EDGE_SELECTOR"
+
+
+def test_json_face_not_found_normalizes_to_retryable_topology_failure():
+    raw = json.dumps({
+        "ok": False,
+        "status": "FAILED",
+        "error": {"code": "FACE_NOT_FOUND", "message": "face selector stale"},
+    })
+    failure = normalize_runtime_failure(raw)
+    assert failure.code == "STALE_FACE_SELECTOR"
+    diagnosis = diagnose_failure(code=failure.code, message=failure.message)
+    assert diagnosis.category == "topology"
+    assert diagnosis.retryable
+    assert diagnosis.solver_hints == ("topology-rebinding-v1",)
 
 
 def test_topology_solver_rebinds_changed_backend_index():
@@ -51,3 +68,41 @@ def test_topology_solver_rebinds_changed_backend_index():
     assert binding.backend_index == 9
     assert binding.source_backend_index == 3
     assert binding.target_state_version == 11
+
+
+def test_topology_solver_rebinds_face_by_geometry():
+    anchor = make_anchor(
+        {
+            "kind": "face",
+            "i": 3,
+            "surface_kind": "plane",
+            "planar": True,
+            "normal": [0.0, 0.0, 1.0],
+            "point": [0.0, 0.0, 0.01],
+            "area": 0.0096,
+        },
+        source_state_version=7,
+    )
+    evidence = TopologyRecoveryEvidence(
+        face_anchor=anchor,
+        face_candidates=(
+            {
+                "kind": "face",
+                "i": 1,
+                "surface_kind": "plane",
+                "planar": True,
+                "normal": [0.0, 0.0, -1.0],
+                "point": [0.0, 0.0, 0.0100000002],
+                "area": 0.0095,
+            },
+        ),
+        target_face_state_version=8,
+    )
+    result = TopologyRecoverySolver().recover(
+        RecoveryRequest("topology", "STALE_FACE_SELECTOR", evidence, 1)
+    )
+    assert result.recovered
+    assert result.face_binding is not None
+    assert result.face_binding.backend_index == 1
+    assert result.face_binding.source_backend_index == 3
+    assert result.face_binding.target_state_version == 8

@@ -1,4 +1,4 @@
-"""Standalone integration layer for proven Ai_Designer CAD assets."""
+"""Integration layer for proven Ai_Designer + SolidPilot assets."""
 
 from .aidesigner_assets import (
     CAPABILITIES,
@@ -9,6 +9,15 @@ from .aidesigner_assets import (
     lower_fillet,
     lower_hole,
     require_capability,
+)
+from .aidesigner_composition_v1 import (
+    AiDesignerCompositionError,
+    AiDesignerStackV1,
+    build_canonical_gateway,
+    build_canonical_pipeline,
+    execute_canonical,
+    load_stack,
+    prepare_and_plan,
 )
 from .recovery_assets import (
     FailureDiagnosis,
@@ -42,6 +51,8 @@ from .reference_resolution_v1 import (
 __all__ = [
     "CAPABILITIES",
     "CapabilitySpec",
+    "AiDesignerCompositionError",
+    "AiDesignerStackV1",
     "FailureDiagnosis",
     "RecoveryAssets",
     "RecoveryController",
@@ -56,18 +67,23 @@ __all__ = [
     "TopologyRecoveryEvidence",
     "TopologyRecoveryResult",
     "TopologyRecoverySolver",
+    "build_canonical_gateway",
+    "build_canonical_pipeline",
     "describe_capabilities",
     "diagnose_failure",
     "edge_evidence",
     "edge_indices_json",
+    "execute_canonical",
     "face_evidence",
     "face_index_json",
     "get_capability",
+    "load_stack",
     "lower_boss",
     "lower_fillet",
     "lower_hole",
     "make_anchor",
     "normalize_runtime_failure",
+    "prepare_and_plan",
     "rebind_anchor",
     "require_capability",
     "resolve_reference",

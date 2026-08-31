@@ -51,10 +51,11 @@ MOTOR_BRACKET_V1 = MotorBracketPlanV1(
                     (-0.045, 0.025),
                     (0.045, 0.025),
                 ),
+                "coordinate_system": "base_profile_sketch_2d",
                 "support_ref": {
-                    "reference_id": "base_top_face_for_holes",
+                    "reference_id": "base_extrusion_end_face_for_holes",
                     "kind": "face",
-                    "role": "top_planar",
+                    "role": "extrude_end_face",
                     "feature_id": "base",
                 },
             },
@@ -68,10 +69,11 @@ MOTOR_BRACKET_V1 = MotorBracketPlanV1(
                 "width_m": 0.008,
                 "height_m": 0.045,
                 "depth_m": 0.01,
+                "coordinate_system": "base_profile_sketch_2d",
                 "support_ref": {
-                    "reference_id": "base_top_face_for_rib_left",
+                    "reference_id": "base_extrusion_end_face_for_rib_left",
                     "kind": "face",
-                    "role": "top_planar",
+                    "role": "extrude_end_face",
                     "feature_id": "base",
                 },
             },
@@ -85,10 +87,11 @@ MOTOR_BRACKET_V1 = MotorBracketPlanV1(
                 "width_m": 0.008,
                 "height_m": 0.045,
                 "depth_m": 0.01,
+                "coordinate_system": "base_profile_sketch_2d",
                 "support_ref": {
-                    "reference_id": "base_top_face_for_rib_right",
+                    "reference_id": "base_extrusion_end_face_for_rib_right",
                     "kind": "face",
-                    "role": "top_planar",
+                    "role": "extrude_end_face",
                     "feature_id": "base",
                 },
             },
@@ -100,13 +103,13 @@ MOTOR_BRACKET_V1 = MotorBracketPlanV1(
             {
                 "radius_m": 0.005,
                 "selection": {
-                    "semantic_role": "outer_vertical_edges",
+                    "semantic_role": "outer_extrusion_edges",
                     "strategy": "fresh_topology_evidence",
                     "reference": {
-                        "reference_id": "outer_vertical_edges_for_fillet",
+                        "reference_id": "outer_extrusion_edges_for_fillet",
                         "kind": "edge",
-                        "role": "all_outer_vertical",
-                        "criteria": {"outer_bounds_m": _BASE_BOUNDS_M},
+                        "role": "outer_extrusion_boundary",
+                        "criteria": {"bounds_uv_m": _BASE_BOUNDS_M, "producer_feature_id": "base"},
                     },
                 },
             },
@@ -119,11 +122,7 @@ def ordered_features(plan: MotorBracketPlanV1 = MOTOR_BRACKET_V1) -> tuple[Featu
     remaining = {feature.feature_id: feature for feature in plan.features}
     ordered: list[FeatureSpec] = []
     while remaining:
-        ready = [
-            feature
-            for feature in remaining.values()
-            if all(dep not in remaining for dep in feature.depends_on)
-        ]
+        ready = [feature for feature in remaining.values() if all(dep not in remaining for dep in feature.depends_on)]
         if not ready:
             raise ValueError("Motor bracket plan contains a dependency cycle")
         ready.sort(key=lambda feature: feature.feature_id)
