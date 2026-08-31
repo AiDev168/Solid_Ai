@@ -55,9 +55,13 @@ def _bootstrap_source_tree() -> Path:
             f"Ai_Designer source tree not found under {configured_path}"
         )
 
-    source_text = str(source)
-    if source_text not in sys.path:
-        sys.path.insert(0, source_text)
+    # Ai_Designer has two relevant import roots on the current main layout:
+    # src/ contains the ai_designer package, while repo-root contains the
+    # top-level agentic package used by the existing proven repair loop.
+    roots = [str(configured_path), str(source)]
+    for root in roots:
+        if root not in sys.path:
+            sys.path.insert(0, root)
     return source
 
 
