@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any, Callable, Mapping
+from typing import Callable, Mapping, Any
 
 from .feature_graph_compiler_v1 import CompiledFeature, CompiledPlan, Operation
 
@@ -55,18 +55,20 @@ class FeatureGraphLoweringRegistryV1:
         )
 
 
-def _require_mapping(params: Mapping[str, Any], key: str) -> Mapping[str, Any]:
-    value = params.get(key)
-    if not isinstance(value, Mapping):
-        raise FeatureGraphLoweringError(f"missing explicit mapping: {key}")
-    return value
-
-
 def _explicit_dimension_mm(params: Mapping[str, Any], key: str) -> float:
     value = params.get(key)
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
         raise FeatureGraphLoweringError(f"{key} must be an explicit positive dimension in mm")
     return float(value) / 1000.0
+
+
+def _explicit_depth_m(params: Mapping[str, Any]) -> float:
+    value = params.get("depth_m")
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        raise FeatureGraphLoweringError(
+            "hole_pattern requires explicit depth_m when through_all is not used"
+        )
+    return float(value)
 
 
 def lower_hole_pattern(feature: CompiledFeature) -> CompiledFeature:
@@ -113,18 +115,30 @@ def lower_hole_pattern(feature: CompiledFeature) -> CompiledFeature:
         )
         for x, y in normalized
     )
+
+    depth_spec = source.get("depth", "through_all")
+    through = depth_spec == "through_all"
+    cut_params: dict[str, Any] = {
+        "feature_type": "cut",
+        "reverse": False,
+        "through": through,
+        "up_to_face_index": -1,
+        "mid_plane": False,
+    }
+    if through:
+        cut_params["depth"] = source.get("through_depth_m")
+        if not isinstance(cut_params["depth"], (int, float)) or isinstance(cut_params["depth"], bool) or cut_params["depth"] <= 0:
+            raise FeatureGraphLoweringError(
+                f"{feature.feature_id}: through_all requires explicit through_depth_m"
+            )
+    else:
+        cut_params["depth"] = _explicit_depth_m(source)
+
     cut = Operation(
         feature.feature_id,
         feature.capability.capability_id,
         "extrude_feature",
-        {
-            "depth": source.get("depth", "through_all"),
-            "feature_type": "cut",
-            "reverse": False,
-            "through": source.get("depth", "through_all") == "through_all",
-            "up_to_face_index": -1,
-            "mid_plane": False,
-        },
+        cut_params,
         phase="execute",
     )
     return replace(feature, operations=(create, *circles, cut))
