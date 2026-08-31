@@ -6,7 +6,7 @@ from typing import Any, Mapping, Sequence
 
 
 class SupportReferenceError(ValueError):
-    """Raised when a feature support reference cannot be resolved safely."""
+    """Raised when a feature support face cannot be resolved safely."""
 
 
 @dataclass(frozen=True)
@@ -30,7 +30,7 @@ def _vec(value: Any) -> tuple[float, float, float] | None:
 
 
 def _unit(value: Sequence[float]) -> tuple[float, float, float]:
-    norm = math.sqrt(sum(float(v) * float(v) for v in value))
+    norm = math.sqrt(sum(float(v) ** 2 for v in value))
     if norm <= 1e-12:
         raise SupportReferenceError("zero-length direction vector")
     return tuple(float(v) / norm for v in value)
@@ -99,14 +99,16 @@ def resolve_extrude_end_face(
     tolerance_m: float = 1e-6,
     angular_tolerance: float = 1e-6,
 ) -> dict[str, Any]:
-    """Resolve an extrusion's end face from the source sketch frame.
+    """Resolve the extrusion end face from source-frame geometry.
 
-    Point matching is against the extrusion plane, not against a particular
-    representative point in the plane. This allows the face to survive cuts
-    and other mutations that change its centroid.
+    The candidate face must have the same plane normal as the source sketch
+    extrusion direction and its representative point must lie within the
+    supplied tolerance of the expected extrusion-end point. This intentionally
+    avoids assuming global XYZ orientation or backend face indices.
     """
     expected_point = expected_extrude_end(frame, depth_m)
     matches: list[tuple[float, Mapping[str, Any]]] = []
+
     for candidate in candidates:
         if candidate.get("planar") is False:
             continue
@@ -114,22 +116,35 @@ def resolve_extrude_end_face(
         normal = _candidate_normal(candidate)
         if point is None or normal is None:
             continue
+
         angular = 1.0 - _dot(normal, frame.normal)
-        plane_distance = abs(_dot(tuple(point[i] - expected_point[i] for i in range(3)), frame.normal))
-        if angular > angular_tolerance or plane_distance > tolerance_m:
+        point_distance = _distance(point, expected_point)
+
+        if angular > angular_tolerance or point_distance > tolerance_m:
             continue
-        score = plane_distance / max(tolerance_m, 1e-12) + angular / max(angular_tolerance, 1e-12)
+
+        score = (
+            point_distance / max(tolerance_m, 1e-12)
+            + angular / max(angular_tolerance, 1e-12)
+        )
         matches.append((score, candidate))
 
     if not matches:
         raise SupportReferenceError(
-            f"no extrusion-end face matches {reference_id}; expected plane point={expected_point}, normal={frame.normal}"
+            f"no extrusion-end face matches {reference_id}; "
+            f"expected point={expected_point}, normal={frame.normal}"
         )
+
     matches.sort(key=lambda item: (item[0], _candidate_index(item[1])))
+
     if len(matches) > 1 and abs(matches[1][0] - matches[0][0]) <= 1e-9:
-        raise SupportReferenceError(f"ambiguous extrusion-end face for reference {reference_id}")
+        raise SupportReferenceError(
+            f"ambiguous extrusion-end face for reference {reference_id}"
+        )
+
     candidate = dict(matches[0][1])
     candidate["backend_index"] = _candidate_index(candidate)
+
     return {
         "reference_id": reference_id,
         "kind": "face",
@@ -186,9 +201,13 @@ def resolve_extrusion_boundary_edges(
         item["reference_id"] = reference_id
         item["state_version"] = state_version
         result.append(item)
+
     result.sort(key=lambda item: item["backend_index"])
+
     if not result:
-        raise SupportReferenceError(f"no extrusion-boundary edges match {reference_id}")
+        raise SupportReferenceError(
+            f"no extrusion-boundary edges match {reference_id}"
+        )
     return tuple(result)
 
 
