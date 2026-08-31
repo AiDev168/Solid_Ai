@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from integration.feature_graph_compiler_v1 import Operation
@@ -33,61 +35,69 @@ class FakeSession:
         return Response(payloads[name])
 
 
-@pytest.mark.anyio
-async def test_real_executor_prepares_and_executes_without_second_execution_stack():
-    session = FakeSession()
-    executor = SolidPilotOperationExecutor(session)
-    operations = [
-        Operation("base", "part.create_sketch", "create_sketch", {"plane": "Top Plane"}),
-        # Primitive sketch operations remain owned by the semantic capability
-        # that introduced them; tool names are not capability identities.
-        Operation("base", "part.create_sketch", "add_sketch_entity", {"entity_type": "rectangle", "x1": -0.05, "y1": -0.03, "x2": 0.05, "y2": 0.03}),
-        Operation("base", "part.extrude_boss", "extrude_feature", {"depth": 0.01, "feature_type": "boss"}),
-    ]
-    class Plan:
-        features = [type("CF", (), {"feature_id": "base", "operations": operations})()]
-    report = await executor.execute_plan(Plan())
-    assert report.ok is True
-    assert report.executed_features == ["base"]
-    assert [c[0] for c in session.calls] == [
-        "ensure_ready", "open_new_part", "create_sketch", "add_sketch_entity", "extrude_feature", "analyze_model"
-    ]
+def test_real_executor_prepares_and_executes_without_second_execution_stack():
+    async def scenario():
+        session = FakeSession()
+        executor = SolidPilotOperationExecutor(session)
+        operations = [
+            Operation("base", "part.create_sketch", "create_sketch", {"plane": "Top Plane"}),
+            Operation("base", "part.create_sketch", "add_sketch_entity", {"entity_type": "rectangle", "x1": -0.05, "y1": -0.03, "x2": 0.05, "y2": 0.03}),
+            Operation("base", "part.extrude_boss", "extrude_feature", {"depth": 0.01, "feature_type": "boss"}),
+        ]
+
+        class Plan:
+            features = [type("CF", (), {"feature_id": "base", "operations": operations})()]
+
+        report = await executor.execute_plan(Plan())
+        assert report.ok is True
+        assert report.executed_features == ["base"]
+        assert [c[0] for c in session.calls] == [
+            "ensure_ready", "open_new_part", "create_sketch", "add_sketch_entity", "extrude_feature", "analyze_model"
+        ]
+
+    asyncio.run(scenario())
 
 
-@pytest.mark.anyio
-async def test_executor_rejects_unlowered_operations():
-    session = FakeSession()
-    executor = SolidPilotOperationExecutor(session)
-    op = Operation("holes", "part.hole", "extrude_feature", {"hole_intent": "M8"}, phase="lower")
-    with pytest.raises(SolidPilotExecutionError, match="UNLOWERED_OPERATION"):
-        await executor.call(op)
-    assert session.calls == []
+def test_executor_rejects_unlowered_operations():
+    async def scenario():
+        session = FakeSession()
+        executor = SolidPilotOperationExecutor(session)
+        op = Operation("holes", "part.hole", "extrude_feature", {"hole_intent": "M8"}, phase="lower")
+        with pytest.raises(SolidPilotExecutionError, match="UNLOWERED_OPERATION"):
+            await executor.call(op)
+        assert session.calls == []
+
+    asyncio.run(scenario())
 
 
-@pytest.mark.anyio
-async def test_catalog_keeps_discovered_tools_as_candidates():
-    class Tool:
-        name = "create_rib"
-        inputSchema = {"type": "object"}
+def test_catalog_keeps_discovered_tools_as_candidates():
+    async def scenario():
+        class Tool:
+            name = "create_rib"
+            inputSchema = {"type": "object"}
 
-    class Session:
-        async def list_tools(self):
-            return type("Page", (), {"tools": [Tool()]})()
+        class Session:
+            async def list_tools(self):
+                return type("Page", (), {"tools": [Tool()]})()
 
-    catalog = SolidPilotCapabilityCatalogV1()
-    records = await catalog.discover_from_session(Session())
-    found = catalog.get("solidpilot.tool.create_rib")
-    assert found is not None
-    assert found.status == "candidate"
-    assert any(item.status == "proven" for item in records)
+        catalog = SolidPilotCapabilityCatalogV1()
+        records = await catalog.discover_from_session(Session())
+        found = catalog.get("solidpilot.tool.create_rib")
+        assert found is not None
+        assert found.status == "candidate"
+        assert any(item.status == "proven" for item in records)
+
+    asyncio.run(scenario())
 
 
 def test_sync_executor_remains_an_injected_boundary():
     calls = []
+
     class E:
         def execute(self, operation):
             calls.append(operation.tool)
             return {"ok": True}
+
     plan = type("Plan", (), {"features": [type("CF", (), {"feature_id": "x", "operations": [Operation("x", "c", "t", {})]})()]})()
     report = CompiledPlanExecutor(E()).execute(plan)
     assert report.ok is True
