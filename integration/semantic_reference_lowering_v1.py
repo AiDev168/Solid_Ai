@@ -33,13 +33,12 @@ def _reference_id(value: Any) -> str | None:
 
 
 def materialize_hole_pattern(feature: CompiledFeature, bindings: Mapping[str, ReferenceBinding]) -> CompiledFeature:
-    lowered = lower_hole_pattern(feature)
-    source = dict(lowered.operations[0].params)
+    source = dict(feature.operations[0].params)
     reference_id = _reference_id(source.get("support_reference"))
     if reference_id is None:
         face_index = source.get("face_index")
         if isinstance(face_index, int) and face_index >= 0:
-            return lowered
+            return lower_hole_pattern(feature)
         raise SemanticReferenceLoweringError(f"{feature.feature_id}: hole_pattern requires support_reference")
     binding = _binding(bindings, reference_id)
     try:
@@ -47,6 +46,10 @@ def materialize_hole_pattern(feature: CompiledFeature, bindings: Mapping[str, Re
     except RuntimeReferenceResolutionError as exc:
         raise SemanticReferenceLoweringError(str(exc)) from exc
 
+    # Resolve the semantic support before geometric lowering. This guarantees
+    # an unbound reference is reported as such rather than being masked by a
+    # missing diameter/center/depth validation error.
+    lowered = lower_hole_pattern(feature)
     rewritten = []
     for operation in lowered.operations:
         params = dict(operation.params)
@@ -62,6 +65,19 @@ def materialize_fillet(feature: CompiledFeature, bindings: Mapping[str, Referenc
     source = dict(feature.operations[0].params)
     reference_id = _reference_id(source.get("selection_reference"))
     if reference_id is None:
+        edge_indices = source.get("edge_indices")
+        if isinstance(edge_indices, (list, tuple)) and edge_indices:
+            return replace(feature, operations=(Operation(
+                feature.feature_id,
+                feature.capability.capability_id,
+                "add_edge_feature",
+                {
+                    "feature_type": "fillet",
+                    "radius_or_distance": float(source["radius_or_distance"]),
+                    "edge_indices": str(list(edge_indices)),
+                },
+                phase="execute",
+            ),))
         raise SemanticReferenceLoweringError(f"{feature.feature_id}: fillet requires selection_reference")
     binding = _binding(bindings, reference_id)
     return replace(feature, operations=(
