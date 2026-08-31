@@ -8,9 +8,15 @@ from pathlib import Path
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+from scripts.launcher_bootstrap import REPOSITORY_ROOT
+from integration.axis_reference_v1 import (
+    bind_revolve_axis,
+    materialize_axis_in_active_sketch,
+    verify_materialized_axis,
+)
 from integration.revolve_reference_v1 import resolve_revolve_axis
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = REPOSITORY_ROOT
 REPO = ROOT / "vendor" / "q3ds-solidworks-mcp"
 PYTHON = REPO / ".venv" / "Scripts" / "python.exe"
 SERVER = REPO / "adapters" / "claude" / "legacy_server.py"
@@ -67,7 +73,8 @@ async def main() -> int:
         {"x1": 0.02, "y1": 0.0, "x2": 0.0, "y2": 0.0},
     ]
 
-    axis = resolve_revolve_axis(profile, axis_role="centerline")
+    axis_endpoints = resolve_revolve_axis(profile, axis_role="centerline")
+    axis = bind_revolve_axis(axis_endpoints, reference_id="stepped_centerline", state_version=3)
 
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
@@ -81,24 +88,24 @@ async def main() -> int:
                 await call(session, "add_sketch_entity", {"entity_type": "line", **segment}, step)
                 step += 1
 
-            await call(
-                session,
-                "extrude_feature",
-                {
-                    "depth": 0.0,
-                    "feature_type": "revolve",
-                    "angle": 360.0,
-                    "axis_x1": axis[0],
-                    "axis_y1": axis[1],
-                    "axis_x2": axis[2],
-                    "axis_y2": axis[3],
-                },
-                step,
-            )
+            await call(session, "extrude_feature", {
+                "depth": 0.0,
+                "feature_type": "revolve",
+                "angle": 360.0,
+                "axis_x1": axis.x1, "axis_y1": axis.y1,
+                "axis_x2": axis.x2, "axis_y2": axis.y2,
+            }, step)
             step += 1
 
-            # Annular groove around the Ø60 section.
+            # The backend revolve contract resolves the axis against the ACTIVE
+            # sketch. Re-materialize the semantic axis as construction geometry
+            # in every subsequent sketch that consumes the same axis.
             await call(session, "create_sketch", {"plane": "Front Plane"}, step); step += 1
+            axis_command = materialize_axis_in_active_sketch(axis)
+            axis_result = await call(session, "add_sketch_entity", axis_command, step); step += 1
+            if not verify_materialized_axis(axis_result, axis):
+                raise RuntimeError("REVOLVE_AXIS_SUPPORT_MISMATCH: active sketch axis geometry did not match semantic binding")
+
             groove = (
                 (0.025, 0.044, 0.032, 0.044),
                 (0.032, 0.044, 0.032, 0.051),
@@ -111,45 +118,38 @@ async def main() -> int:
                 }, step)
                 step += 1
 
-            await call(
-                session,
-                "extrude_feature",
-                {
-                    "depth": 0.0,
-                    "feature_type": "revolve_cut",
-                    "angle": 360.0,
-                    "axis_x1": axis[0],
-                    "axis_y1": axis[1],
-                    "axis_x2": axis[2],
-                    "axis_y2": axis[3],
-                },
-                step,
-            )
+            await call(session, "extrude_feature", {
+                "depth": 0.0,
+                "feature_type": "revolve_cut",
+                "angle": 360.0,
+                "axis_x1": axis.x1, "axis_y1": axis.y1,
+                "axis_x2": axis.x2, "axis_y2": axis.y2,
+            }, step)
             step += 1
 
-            # Radial hole on the large end face. The exact support is resolved by
-            # the live execution layer and verified by the resulting cut.
             faces = await call(session, "analyze_model", {"analysis_type": "faces"}, step); step += 1
             raw_faces = (((faces or {}).get("data") or {}).get("faces") or []) if isinstance(faces, dict) else []
-            end_face = None
-            for face in raw_faces:
-                normal = face.get("normal")
-                point = face.get("point")
-                if isinstance(normal, list) and isinstance(point, list) and len(normal) >= 3 and len(point) >= 3:
-                    if abs(abs(float(normal[1])) - 1.0) < 1e-6 and abs(float(point[1]) - 0.12) < 1e-6:
-                        end_face = face
-                        break
+            end_face = next(
+                (
+                    face for face in raw_faces
+                    if isinstance(face.get("normal"), list)
+                    and isinstance(face.get("point"), list)
+                    and len(face["normal"]) >= 3
+                    and len(face["point"]) >= 3
+                    and abs(abs(float(face["normal"][1])) - 1.0) < 1e-6
+                    and abs(float(face["point"][1]) - 0.12) < 1e-6
+                ),
+                None,
+            )
             if end_face is None:
                 raise RuntimeError("No axial end face found for hole")
 
             face_index = int(end_face.get("i", end_face.get("backend_index")))
             await call(session, "create_sketch", {"on_face": True, "face_index": face_index}, step); step += 1
-            await call(session, "add_sketch_entity", {
-                "entity_type": "circle", "cx": 0.0, "cy": 0.0, "radius": 0.006
-            }, step); step += 1
+            await call(session, "add_sketch_entity", {"entity_type": "circle", "cx": 0.0, "cy": 0.0, "radius": 0.006}, step); step += 1
             await call(session, "extrude_feature", {
                 "depth": 0.04, "feature_type": "cut", "reverse": False,
-                "through": False, "up_to_face_index": -1, "mid_plane": False
+                "through": False, "up_to_face_index": -1, "mid_plane": False,
             }, step); step += 1
 
             edges = await call(session, "analyze_model", {"analysis_type": "edges"}, step); step += 1
@@ -165,17 +165,17 @@ async def main() -> int:
             if not usable:
                 raise RuntimeError("No usable edges found before fillet")
 
-            # Pick the longest exposed circular/axial edge after all previous mutations.
             selected = max(usable, key=lambda e: float(e.get("length", 0.0)))
             edge_index = int(selected["i"])
             await call(session, "add_edge_feature", {
                 "feature_type": "fillet",
                 "radius_or_distance": 0.003,
                 "edge_indices": json.dumps([edge_index]),
-            }, step); step += 1
+            }, step)
+            step += 1
 
             final = await call(session, "analyze_model", {"analysis_type": "geometry"}, step)
-            print("\nPASS: stepped revolve + groove + hole + fillet")
+            print("\\nPASS: stepped revolve + groove + hole + fillet")
             print(json.dumps(final, ensure_ascii=False, indent=2, default=str))
             return 0
 
