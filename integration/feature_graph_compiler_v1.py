@@ -70,49 +70,36 @@ def _holes(node: FeatureNode, capability: CapabilitySpec) -> CompiledFeature:
         raise FeatureGraphCompileError(f"{node.feature_id}: hole_pattern requires semantic fastener/nominal")
     if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
         raise FeatureGraphCompileError(f"{node.feature_id}: hole_pattern count must be a positive integer")
-    support_reference = params.get("support_reference")
-    return CompiledFeature(node.feature_id, capability, (Operation(
-        node.feature_id,
-        capability.capability_id,
-        capability.tool,
-        {
-            "hole_intent": fastener.strip(),
-            "count": count,
-            "pattern_type": params.get("pattern_type", "rectangular"),
-            "spacing_x_m": _optional_mm(params.get("spacing_x")),
-            "spacing_y_m": _optional_mm(params.get("spacing_y")),
-            "depth": params.get("depth", "through_all"),
-            "diameter_mm": params.get("diameter_mm"),
-            "support_reference": support_reference,
-            "support_face_index": params.get("support_face_index"),
-            "centers_mm": params.get("centers_mm"),
-            "through_depth_m": params.get("through_depth_m"),
-            "depth_m": params.get("depth_m"),
-        },
-        phase="lower",
-    ),))
+    payload = {
+        "hole_intent": fastener.strip(),
+        "count": count,
+        "pattern_type": params.get("pattern_type", "rectangular"),
+        "spacing_x_m": _optional_mm(params.get("spacing_x")),
+        "spacing_y_m": _optional_mm(params.get("spacing_y")),
+        "depth": params.get("depth", "through_all"),
+        "diameter_mm": params.get("diameter_mm"),
+        "support_reference": params.get("support_reference"),
+        "support_face_index": params.get("support_face_index"),
+        "centers_mm": params.get("centers_mm"),
+        "through_depth_m": params.get("through_depth_m"),
+        "depth_m": params.get("depth_m"),
+    }
+    return CompiledFeature(node.feature_id, capability, (Operation(node.feature_id, capability.capability_id, capability.tool, payload, phase="lower"),))
 
 
 def _rib(node: FeatureNode, capability: CapabilitySpec) -> CompiledFeature:
     params = dict(node.params)
-    support_reference = params.get("support_reference")
-    return CompiledFeature(node.feature_id, capability, (Operation(
-        node.feature_id,
-        capability.capability_id,
-        capability.tool,
-        {
-            "rib_intent": True,
-            "height_m": _optional_mm(params.get("height")),
-            "thickness_m": _optional_mm(params.get("thickness")),
-            "position": params.get("position"),
-            "count": params.get("count", 1),
-            "support_reference": support_reference,
-            "x_center_mm": params.get("x_center_mm"),
-            "width_mm": params.get("width_mm"),
-            "span_mm": params.get("span_mm"),
-        },
-        phase="lower",
-    ),))
+    return CompiledFeature(node.feature_id, capability, (Operation(node.feature_id, capability.capability_id, capability.tool, {
+        "rib_intent": True,
+        "height_m": _optional_mm(params.get("height")),
+        "thickness_m": _optional_mm(params.get("thickness")),
+        "position": params.get("position"),
+        "count": params.get("count", 1),
+        "support_reference": params.get("support_reference"),
+        "x_center_mm": params.get("x_center_mm"),
+        "width_mm": params.get("width_mm"),
+        "span_mm": params.get("span_mm"),
+    }, phase="lower"),))
 
 
 def _fillet(node: FeatureNode, capability: CapabilitySpec) -> CompiledFeature:
@@ -127,19 +114,15 @@ def _fillet(node: FeatureNode, capability: CapabilitySpec) -> CompiledFeature:
             selection_reference = reference
     if selection_reference is None and selection is None:
         raise FeatureGraphCompileError(f"{node.feature_id}: fillet requires semantic selection")
-    return CompiledFeature(node.feature_id, capability, (Operation(
-        node.feature_id,
-        capability.capability_id,
-        capability.tool,
-        {
-            "feature_type": "fillet",
-            "radius_or_distance": radius_m,
-            "selection_intent": selection,
-            "selection_reference": selection_reference,
-            "edge_indices": params.get("edge_indices"),
-        },
-        phase="lower",
-    ),))
+    payload = {
+        "feature_type": "fillet",
+        "radius_or_distance": radius_m,
+        "selection_intent": selection,
+        "selection_reference": selection_reference,
+    }
+    if params.get("edge_indices") is not None:
+        payload["edge_indices"] = params["edge_indices"]
+    return CompiledFeature(node.feature_id, capability, (Operation(node.feature_id, capability.capability_id, capability.tool, payload, phase="lower"),))
 
 
 def _axis_endpoints_mm(params: Mapping[str, Any], feature_id: str) -> tuple[float, float, float, float]:
@@ -189,19 +172,13 @@ _HANDLERS = {
 }
 
 
-def compile_feature_graph(
-    graph: FeatureGraph,
-    *,
-    capability_registry: FeatureCapabilityRegistryV1 | None = None,
-) -> CompiledPlan:
+def compile_feature_graph(graph: FeatureGraph, *, capability_registry: FeatureCapabilityRegistryV1 | None = None) -> CompiledPlan:
     registry = capability_registry or build_default_feature_capability_registry()
     compiled: list[CompiledFeature] = []
     for node in graph.features:
         binding = registry.binding_for(node.kind)
         if binding is None:
-            raise FeatureGraphCompileError(
-                f"no explicit capability binding for semantic feature kind: {node.kind}"
-            )
+            raise FeatureGraphCompileError(f"no explicit capability binding for semantic feature kind: {node.kind}")
         handler = _HANDLERS.get(node.kind)
         if handler is None:
             raise FeatureGraphCompileError(f"compiler handler missing: {node.kind}")
