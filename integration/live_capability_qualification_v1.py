@@ -21,20 +21,57 @@ class LiveQualificationEvidence:
     error: str | None = None
 
 
+def _decode_json_text(text: str, tool: str) -> Mapping[str, Any]:
+    text = text.strip()
+    if not text:
+        raise QualificationPreflightError(f"empty MCP result for {tool}")
+    try:
+        payload = json.loads(text)
+        if isinstance(payload, Mapping):
+            return payload
+    except json.JSONDecodeError:
+        pass
+
+    decoder = json.JSONDecoder()
+    for marker in ("{", "["):
+        start = text.find(marker)
+        while start >= 0:
+            try:
+                payload, _ = decoder.raw_decode(text[start:])
+            except json.JSONDecodeError:
+                start = text.find(marker, start + 1)
+                continue
+            if isinstance(payload, Mapping):
+                if isinstance(payload.get("ok"), bool):
+                    return payload
+                # MCP error wrappers sometimes carry a nested error object.
+                nested = payload.get("error")
+                if isinstance(nested, Mapping):
+                    return {
+                        "ok": False,
+                        "status": "FAILED",
+                        "tool": tool,
+                        **nested,
+                    }
+                return payload
+            break
+    raise QualificationPreflightError(f"invalid MCP result for {tool}: {text[:500]}")
+
+
 def _extract_payload(result: Any, tool: str) -> Mapping[str, Any]:
     structured = getattr(result, "structuredContent", None)
     if isinstance(structured, Mapping):
         value = structured.get("result")
         if isinstance(value, str):
-            payload = json.loads(value)
-            if isinstance(payload, Mapping):
-                return payload
+            return _decode_json_text(value, tool)
+        if isinstance(value, Mapping):
+            return value
+
     for item in getattr(result, "content", None) or []:
         text = getattr(item, "text", "")
         if text:
-            payload = json.loads(text)
-            if isinstance(payload, Mapping):
-                return payload
+            return _decode_json_text(text, tool)
+
     raise QualificationPreflightError(f"invalid MCP result for {tool}")
 
 
@@ -80,7 +117,7 @@ class LiveQualificationExecutorV1:
             result = await self._call(str(operation["tool"]), operation["params"])
             state_version = result.get("state_version", state_version)
             evidence.append({"step": index, "tool": operation["tool"], "result": result})
-            if result.get("status") not in {"READY", "COMPLETED"}:
+            if result.get("status") not in {"READY", "COMPLETED"} or result.get("ok") is False:
                 return {
                     "ok": False,
                     "verified": False,
@@ -88,7 +125,9 @@ class LiveQualificationExecutorV1:
                     "capability_id": scenario.capability_id,
                     "state_version": state_version,
                     "evidence": evidence,
-                    "error": f"operation failed: {operation['tool']}",
+                    "error": result.get("message") or result.get("error") or f"operation failed: {operation['tool']}",
+                    "tool": result.get("tool", operation["tool"]),
+                    "code": result.get("code"),
                 }
 
         geometry = await self._call("analyze_model", {"analysis_type": "geometry"})
