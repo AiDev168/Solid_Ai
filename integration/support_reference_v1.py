@@ -6,7 +6,7 @@ from typing import Any, Mapping, Sequence
 
 
 class SupportReferenceError(ValueError):
-    """Raised when a feature support face cannot be resolved safely."""
+    """Raised when a feature support reference cannot be resolved safely."""
 
 
 @dataclass(frozen=True)
@@ -37,7 +37,11 @@ def _unit(value: Sequence[float]) -> tuple[float, float, float]:
 
 
 def _cross(a: Sequence[float], b: Sequence[float]) -> tuple[float, float, float]:
-    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+    return (
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    )
 
 
 def _dot(a: Sequence[float], b: Sequence[float]) -> float:
@@ -98,16 +102,20 @@ def resolve_extrude_end_face(
     state_version: int,
     tolerance_m: float = 1e-6,
     angular_tolerance: float = 1e-6,
+    ambiguity_factor: float = 1.25,
 ) -> dict[str, Any]:
-    """Resolve the extrusion end face from source-frame geometry.
+    """Resolve an extrusion end face from source-frame geometry.
 
-    The candidate face must have the same plane normal as the source sketch
-    extrusion direction and its representative point must lie within the
-    supplied tolerance of the expected extrusion-end point. This intentionally
-    avoids assuming global XYZ orientation or backend face indices.
+    Acceptance requires matching extrusion direction and representative-point
+    proximity. A separate ambiguity halo prevents silently selecting a single
+    face when another geometrically plausible candidate is nearby.
     """
+    if ambiguity_factor < 1.0:
+        raise SupportReferenceError("ambiguity_factor must be >= 1")
+
     expected_point = expected_extrude_end(frame, depth_m)
-    matches: list[tuple[float, Mapping[str, Any]]] = []
+    matches: list[tuple[float, Mapping[str, Any], float]] = []
+    near_candidates: list[tuple[float, Mapping[str, Any]]] = []
 
     for candidate in candidates:
         if candidate.get("planar") is False:
@@ -118,16 +126,18 @@ def resolve_extrude_end_face(
             continue
 
         angular = 1.0 - _dot(normal, frame.normal)
-        point_distance = _distance(point, expected_point)
-
-        if angular > angular_tolerance or point_distance > tolerance_m:
+        if angular > angular_tolerance:
             continue
 
-        score = (
-            point_distance / max(tolerance_m, 1e-12)
-            + angular / max(angular_tolerance, 1e-12)
-        )
-        matches.append((score, candidate))
+        point_distance = _distance(point, expected_point)
+        if point_distance <= tolerance_m:
+            score = (
+                point_distance / max(tolerance_m, 1e-12)
+                + angular / max(angular_tolerance, 1e-12)
+            )
+            matches.append((score, candidate, point_distance))
+        elif point_distance <= tolerance_m * ambiguity_factor:
+            near_candidates.append((point_distance, candidate))
 
     if not matches:
         raise SupportReferenceError(
@@ -136,13 +146,25 @@ def resolve_extrude_end_face(
         )
 
     matches.sort(key=lambda item: (item[0], _candidate_index(item[1])))
+    best_score, best, best_distance = matches[0]
 
-    if len(matches) > 1 and abs(matches[1][0] - matches[0][0]) <= 1e-9:
-        raise SupportReferenceError(
-            f"ambiguous extrusion-end face for reference {reference_id}"
-        )
+    for _, candidate in near_candidates:
+        candidate_distance = _distance(_candidate_point(candidate) or expected_point, expected_point)
+        if candidate_distance <= tolerance_m * ambiguity_factor:
+            raise SupportReferenceError(
+                f"ambiguous extrusion-end face for reference {reference_id}: "
+                f"candidate {_candidate_index(candidate)} is inside ambiguity halo"
+            )
 
-    candidate = dict(matches[0][1])
+    if len(matches) > 1:
+        second_distance = matches[1][2]
+        if abs(second_distance - best_distance) <= tolerance_m * 0.25:
+            raise SupportReferenceError(
+                f"ambiguous extrusion-end face for reference {reference_id}: "
+                "multiple accepted candidates are too close to distinguish safely"
+            )
+
+    candidate = dict(best)
     candidate["backend_index"] = _candidate_index(candidate)
 
     return {
@@ -154,7 +176,7 @@ def resolve_extrude_end_face(
         "expected_point": expected_point,
         "expected_normal": frame.normal,
         "evidence": candidate,
-        "score": matches[0][0],
+        "score": best_score,
     }
 
 
@@ -173,7 +195,7 @@ def resolve_extrusion_boundary_edges(
     boundary_tolerance_m: float = 1e-7,
     parallel_tolerance: float = 1e-6,
 ) -> tuple[dict[str, Any], ...]:
-    """Resolve edges parallel to the extrusion axis and on the source-profile boundary."""
+    """Resolve edges parallel to the extrusion axis on the source-profile boundary."""
     umin, umax, vmin, vmax = bounds_uv
     result: list[dict[str, Any]] = []
     for raw in candidates:
@@ -181,10 +203,19 @@ def resolve_extrusion_boundary_edges(
         end = _vec(raw.get("end"))
         if start is None or end is None:
             continue
-        direction = _unit(tuple(end[i] - start[i] for i in range(3)))
+
+        delta = tuple(end[i] - start[i] for i in range(3))
+        length = math.sqrt(sum(float(v) ** 2 for v in delta))
+        # Degenerate topology edges are valid backend evidence but cannot be
+        # classified directionally. They are ignored rather than fatal.
+        if length <= 1e-12:
+            continue
+
+        direction = tuple(float(v) / length for v in delta)
         parallel_error = 1.0 - abs(_dot(direction, frame.normal))
         if parallel_error > parallel_tolerance:
             continue
+
         mid = tuple((start[i] + end[i]) / 2.0 for i in range(3))
         u, v, _ = _project(mid, frame)
         on_boundary = (
@@ -195,6 +226,7 @@ def resolve_extrusion_boundary_edges(
         )
         if not on_boundary:
             continue
+
         item = dict(raw)
         item["backend_index"] = _candidate_index(item)
         item["uv"] = (u, v)
@@ -203,7 +235,6 @@ def resolve_extrusion_boundary_edges(
         result.append(item)
 
     result.sort(key=lambda item: item["backend_index"])
-
     if not result:
         raise SupportReferenceError(
             f"no extrusion-boundary edges match {reference_id}"
