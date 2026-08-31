@@ -30,7 +30,8 @@ def test_executor_runs_compiled_operations_in_graph_order():
     report = CompiledPlanExecutor(recorder).execute(compile_feature_graph(graph()))
     assert report.ok is True
     assert report.executed_features == ["profile", "base"]
-    assert [op.feature_id for op in recorder.operations] == ["profile", "base"]
+    assert [op.feature_id for op in recorder.operations] == ["profile", "profile", "base"]
+    assert [op.tool for op in recorder.operations] == ["create_sketch", "add_sketch_entity", "extrude_feature"]
 
 
 def test_executor_does_not_own_cad_or_llm_logic():
