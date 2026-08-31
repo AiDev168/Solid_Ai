@@ -48,6 +48,8 @@ def test_load_stack_requires_canonical_assets(monkeypatch):
             "ai_designer.recovery",
             "ai_designer.diagnostics",
             "ai_designer.planning",
+            "ai_designer.agentic",
+            "ai_designer.agents",
             "agentic",
         }:
             module.__path__ = []
