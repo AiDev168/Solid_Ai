@@ -37,3 +37,8 @@ $env:BENCHMARK_BASE_URL="https://api.gapgpt.app/v1"
 $env:BENCHMARK_MODEL="gapgpt-qwen-3.5"
 $env:BENCHMARK_API_KEY="<your-key>"
 ```
+
+
+## Provider precedence
+
+When BENCHMARK_PROVIDER=api-provider/external is set, BENCHMARK_BASE_URL, BENCHMARK_MODEL and BENCHMARK_API_KEY are authoritative and overwrite any stale AIDESIGNER_LLM_* values left by an earlier local LM Studio session. LM Studio is never selected unless SOLID_AI_ALLOW_LMSTUDIO=1 is explicitly set.
