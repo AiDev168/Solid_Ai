@@ -39,7 +39,9 @@ async def test_real_executor_prepares_and_executes_without_second_execution_stac
     executor = SolidPilotOperationExecutor(session)
     operations = [
         Operation("base", "part.create_sketch", "create_sketch", {"plane": "Top Plane"}),
-        Operation("base", "sketch.rectangle", "add_sketch_entity", {"entity_type": "rectangle", "x1": -0.05, "y1": -0.03, "x2": 0.05, "y2": 0.03}),
+        # Primitive sketch operations remain owned by the semantic capability
+        # that introduced them; tool names are not capability identities.
+        Operation("base", "part.create_sketch", "add_sketch_entity", {"entity_type": "rectangle", "x1": -0.05, "y1": -0.03, "x2": 0.05, "y2": 0.03}),
         Operation("base", "part.extrude_boss", "extrude_feature", {"depth": 0.01, "feature_type": "boss"}),
     ]
     class Plan:
