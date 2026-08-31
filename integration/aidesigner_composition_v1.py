@@ -34,12 +34,20 @@ class AiDesignerStackV1:
 def _bootstrap_source_tree() -> Path:
     """Make separately-owned Ai_Designer source importable without copying it."""
     configured = os.getenv("AI_DESIGNER_ROOT") or os.getenv("AI_DESIGNER_SRC")
-    if not configured:
-        raise AiDesignerCompositionError(
-            "AI_DESIGNER_ROOT (repository root) or AI_DESIGNER_SRC must be configured"
-        )
 
-    configured_path = Path(configured).expanduser().resolve()
+    # Explicit configuration wins. For the common sibling-repository layout,
+    # fall back to ../Ai_Designer so the composed runner works without a fragile
+    # environment prerequisite while keeping the two repositories separate.
+    if configured:
+        configured_path = Path(configured).expanduser().resolve()
+    else:
+        sibling = Path(__file__).resolve().parents[2] / "Ai_Designer"
+        if not sibling.exists():
+            raise AiDesignerCompositionError(
+                "Ai_Designer source not found. Set AI_DESIGNER_ROOT to the "
+                "Ai_Designer repository root (or AI_DESIGNER_SRC to its src directory)."
+            )
+        configured_path = sibling.resolve()
     candidates = [configured_path / "src", configured_path]
     source = next((item for item in candidates if (item / "ai_designer").is_dir()), None)
     if source is None:
