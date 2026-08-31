@@ -59,6 +59,12 @@ def verify_materialized_axis(
     *,
     tolerance: float = 1e-7,
 ) -> bool:
+    """Verify the line geometry by unordered endpoint-set equality.
+
+    SolidWorks may return the same segment with its endpoint order reversed.
+    Orientation is not part of line identity, so both endpoint orientations are
+    accepted while coordinate values still have to match within tolerance.
+    """
     geometry = result.get("result_geometry")
     if not isinstance(geometry, Mapping):
         return False
@@ -68,9 +74,18 @@ def verify_materialized_axis(
     if not all(isinstance(value, (int, float)) for value in values):
         return False
     actual = tuple(float(value) for value in values)
-    expected = (binding.x1, binding.y1, binding.x2, binding.y2)
-    direct = all(abs(actual[i] - expected[i]) <= tolerance for i in range(4))
-    reverse = all(abs(actual[i] - expected[3 - i]) <= tolerance for i in range(4))
+    direct = (
+        abs(actual[0] - binding.x1) <= tolerance
+        and abs(actual[1] - binding.y1) <= tolerance
+        and abs(actual[2] - binding.x2) <= tolerance
+        and abs(actual[3] - binding.y2) <= tolerance
+    )
+    reverse = (
+        abs(actual[0] - binding.x2) <= tolerance
+        and abs(actual[1] - binding.y2) <= tolerance
+        and abs(actual[2] - binding.x1) <= tolerance
+        and abs(actual[3] - binding.y1) <= tolerance
+    )
     return direct or reverse
 
 
