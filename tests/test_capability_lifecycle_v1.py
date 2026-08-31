@@ -26,15 +26,23 @@ def test_revolve_compiles_only_with_explicit_axis_endpoints_and_normalizes_units
         "part_id": "shaft",
         "design_intent": "stepped shaft",
         "units": "mm",
-        "features": [{
-            "feature_id": "revolve",
-            "kind": "revolve",
-            "depends_on": ["profile"],
-            "params": {"angle_deg": 360, "axis_endpoints": [[0, 0], [0, 120]]},
-        }],
+        "features": [
+            {
+                "feature_id": "profile",
+                "kind": "profile",
+                "depends_on": [],
+                "params": {"width": 40, "height": 120},
+            },
+            {
+                "feature_id": "revolve",
+                "kind": "revolve",
+                "depends_on": ["profile"],
+                "params": {"angle_deg": 360, "axis_endpoints": [[0, 0], [0, 120]]},
+            },
+        ],
     })
     compiled = compile_feature_graph(graph)
-    op = compiled.features[0].operations[0]
+    op = compiled.features[1].operations[0]
     assert op.capability_id == "part.revolve"
     assert op.params["feature_type"] == "revolve"
     assert op.params["axis_x1"] == pytest.approx(0.0)
