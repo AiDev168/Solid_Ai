@@ -23,6 +23,7 @@ def test_hole_pattern_lowers_only_with_explicit_diameter_and_centers():
                 "count": 4,
                 "diameter_mm": 8.0,
                 "centers_mm": [[-50, -30], [50, -30], [50, 30], [-50, 30]],
+                "through_depth_m": 0.01,
             },
         }],
     })
@@ -40,6 +41,7 @@ def test_hole_pattern_lowers_only_with_explicit_diameter_and_centers():
     assert ops[1].params["cx"] == pytest.approx(-0.05)
     assert ops[-1].params["feature_type"] == "cut"
     assert ops[-1].params["through"] is True
+    assert ops[-1].params["depth"] == pytest.approx(0.01)
 
 
 def test_m8_alone_never_gets_converted_to_a_backend_diameter():
