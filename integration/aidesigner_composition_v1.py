@@ -5,7 +5,7 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 class AiDesignerCompositionError(RuntimeError):
@@ -25,6 +25,9 @@ class AiDesignerStackV1:
     design_loop_cls: Any
     recovery_controller_cls: Any
     recovery_registry_cls: Any
+    topology_solver_cls: Any
+    diagnosis_agent_cls: Any
+    repair_agent_cls: Any
     legacy_repair_bridge_cls: Any
 
 
@@ -37,10 +40,7 @@ def _bootstrap_source_tree() -> Path:
         )
 
     configured_path = Path(configured).expanduser().resolve()
-    candidates = [
-        configured_path / "src",
-        configured_path,
-    ]
+    candidates = [configured_path / "src", configured_path]
     source = next((item for item in candidates if (item / "ai_designer").is_dir()), None)
     if source is None:
         raise AiDesignerCompositionError(
@@ -53,7 +53,7 @@ def _bootstrap_source_tree() -> Path:
 
 
 def _map_benchmark_provider_env() -> None:
-    """Reuse Ai_Designer's canonical gateway while accepting the project's BENCHMARK env."""
+    """Reuse Ai_Designer's canonical gateway while accepting BENCHMARK_* variables."""
     provider = os.getenv("BENCHMARK_PROVIDER", "").strip().lower()
     if provider not in {"api-provider", "external"}:
         return
@@ -66,15 +66,13 @@ def _map_benchmark_provider_env() -> None:
             "BENCHMARK_PROVIDER requires BENCHMARK_BASE_URL, BENCHMARK_MODEL and BENCHMARK_API_KEY"
         )
 
-    # Do not replace explicit Ai_Designer configuration. BENCHMARK_* is an adapter-level
-    # compatibility surface for GapGPT and other OpenAI-compatible providers.
     os.environ.setdefault("AIDESIGNER_LLM_BASE_URL", base_url)
     os.environ.setdefault("AIDESIGNER_LLM_MODEL", model)
     os.environ.setdefault("AIDESIGNER_LLM_API_KEY", api_key)
 
 
 def load_stack() -> AiDesignerStackV1:
-    """Load the existing Ai_Designer brain; do not reimplement any of these layers."""
+    """Load the existing Ai_Designer brain; do not reimplement these layers."""
     _bootstrap_source_tree()
     _map_benchmark_provider_env()
     try:
@@ -97,6 +95,9 @@ def load_stack() -> AiDesignerStackV1:
         design_loop = importlib.import_module("agentic.design_loop")
         recovery_controller = importlib.import_module("ai_designer.recovery.controller")
         recovery_registry = importlib.import_module("ai_designer.recovery.registry")
+        topology_solver = importlib.import_module("ai_designer.recovery.topology_solver")
+        diagnosis = importlib.import_module("ai_designer.diagnostics.diagnosis")
+        repair = importlib.import_module("ai_designer.planning.execution_repair")
         legacy_bridge = importlib.import_module("agentic.legacy_repair_bridge")
     except ImportError as exc:
         raise AiDesignerCompositionError(
@@ -113,6 +114,9 @@ def load_stack() -> AiDesignerStackV1:
         design_loop_cls=design_loop.DesignIntegrationLoop,
         recovery_controller_cls=recovery_controller.RecoveryController,
         recovery_registry_cls=recovery_registry.RecoverySolverRegistry,
+        topology_solver_cls=topology_solver.TopologyRebindingRecoverySolver,
+        diagnosis_agent_cls=diagnosis.DiagnosisAgent,
+        repair_agent_cls=repair.ExecutionRepairAgent,
         legacy_repair_bridge_cls=legacy_bridge.LegacyRepairBridge,
     )
 
@@ -124,8 +128,8 @@ def build_canonical_gateway() -> Any:
 def build_canonical_pipeline(*, solidpilot_base_url: str = "http://localhost:5000") -> Any:
     """Build Ai_Designer's canonical NL -> Requirements -> Intent -> Planning pipeline.
 
-    Execution remains delegated to the same SolidPilot HTTP contract; Solid_Ai does not
-    introduce another LLM gateway or another engineering semantics authority here.
+    Execution stays behind the existing SolidPilot HTTP contract. No second LLM
+    transport, requirements authority, or CAD execution stack is introduced here.
     """
     stack = load_stack()
     client_module = importlib.import_module("ai_designer.solidpilot.client")
@@ -158,11 +162,56 @@ def execute_canonical(
     return pipeline.execute(user_text, operation_prefix=operation_prefix)
 
 
+def build_deterministic_recovery_controller() -> Any:
+    """Reuse Ai_Designer's bounded topology recovery solver/controller."""
+    stack = load_stack()
+    registry = stack.recovery_registry_cls()
+    registry.register(stack.topology_solver_cls())
+    return stack.recovery_controller_cls(registry)
+
+
+def build_llm_repair_bridge(*, gateway: Any | None = None) -> Any:
+    """Reuse Ai_Designer's existing LLM diagnosis + intent-repair bridge."""
+    stack = load_stack()
+    active_gateway = gateway or stack.gateway_cls.from_environment()
+    diagnosis_agent = stack.diagnosis_agent_cls(active_gateway)
+    repair_agent = stack.repair_agent_cls(active_gateway)
+    return stack.legacy_repair_bridge_cls(diagnosis_agent, repair_agent)
+
+
+def build_design_loop(
+    *,
+    compile_design: Callable[[Any], Any],
+    execute_compiled: Callable[[Any], Any],
+    verify_result: Callable[[Any, Any], Any],
+    diagnose: Callable[[Any, Any, Any, Any], Any],
+    repair: Callable[[Any, Any], Any],
+    validate_repair: Callable[[Any], bool],
+) -> Any:
+    """Instantiate the proven Ai_Designer PLAN -> EXECUTE -> VERIFY -> REPAIR loop.
+
+    Callers supply the existing Solid_Ai compile/execute/verify ports; orchestration
+    and retry semantics stay owned by Ai_Designer.
+    """
+    stack = load_stack()
+    return stack.design_loop_cls(
+        compile_design=compile_design,
+        execute_compiled=execute_compiled,
+        verify_result=verify_result,
+        diagnose=diagnose,
+        repair=repair,
+        validate_repair=validate_repair,
+    )
+
+
 __all__ = [
     "AiDesignerCompositionError",
     "AiDesignerStackV1",
     "build_canonical_gateway",
     "build_canonical_pipeline",
+    "build_design_loop",
+    "build_deterministic_recovery_controller",
+    "build_llm_repair_bridge",
     "execute_canonical",
     "load_stack",
     "prepare_and_plan",
