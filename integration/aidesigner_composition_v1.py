@@ -28,7 +28,9 @@ class AiDesignerStackV1:
     topology_solver_cls: Any
     diagnosis_agent_cls: Any
     repair_agent_cls: Any
-    legacy_repair_bridge_cls: Any
+    agentic_engineering_loop_cls: Any
+    agentic_recovery_coordinator_cls: Any
+    execution_supervisor_cls: Any
 
 
 def _bootstrap_source_tree() -> Path:
@@ -95,16 +97,18 @@ def load_stack() -> AiDesignerStackV1:
         intake = importlib.import_module("ai_designer.engineering.engineering_intake_assessment_v1")
         planning = importlib.import_module("ai_designer.engineering.requirements_planning_v2")
         req_sp = importlib.import_module("ai_designer.engineering.requirements_solidpilot_v1")
-        design_loop = importlib.import_module("agentic.design_loop")
+        agentic_loop = importlib.import_module("ai_designer.agents.agentic_engineering_loop_v1")
+        recovery_coordinator = importlib.import_module("ai_designer.agentic.recovery_coordinator_v1")
+        supervisor = importlib.import_module("ai_designer.agentic.supervisor")
         recovery_controller = importlib.import_module("ai_designer.recovery.controller")
         recovery_registry = importlib.import_module("ai_designer.recovery.registry")
         topology_solver = importlib.import_module("ai_designer.recovery.topology_solver")
         diagnosis = importlib.import_module("ai_designer.diagnostics.diagnosis")
         repair = importlib.import_module("ai_designer.planning.execution_repair")
-        legacy_bridge = importlib.import_module("agentic.legacy_repair_bridge")
     except ImportError as exc:
+        missing = getattr(exc, "name", None) or str(exc)
         raise AiDesignerCompositionError(
-            f"Could not import canonical Ai_Designer component: {exc.name or exc}; {exc}"
+            f"Could not import canonical Ai_Designer component: {missing}; {exc}"
         ) from exc
 
     return AiDesignerStackV1(
@@ -114,13 +118,15 @@ def load_stack() -> AiDesignerStackV1:
         intake_assessor_cls=intake.EngineeringIntakeAssessorV1,
         requirements_planning_cls=planning.RequirementsPlanningV2,
         requirements_solidpilot_cls=req_sp.RequirementsSolidPilotV1,
-        design_loop_cls=design_loop.DesignIntegrationLoop,
+        design_loop_cls=supervisor.AgenticExecutionSupervisor,
         recovery_controller_cls=recovery_controller.RecoveryController,
         recovery_registry_cls=recovery_registry.RecoverySolverRegistry,
         topology_solver_cls=topology_solver.TopologyRebindingRecoverySolver,
         diagnosis_agent_cls=diagnosis.DiagnosisAgent,
         repair_agent_cls=repair.ExecutionRepairAgent,
-        legacy_repair_bridge_cls=legacy_bridge.LegacyRepairBridge,
+        agentic_engineering_loop_cls=agentic_loop.AgenticEngineeringLoopV1,
+        agentic_recovery_coordinator_cls=recovery_coordinator.AgenticRecoveryCoordinatorV1,
+        execution_supervisor_cls=supervisor.AgenticExecutionSupervisor,
     )
 
 
@@ -150,17 +156,21 @@ def execute_canonical(user_text: str, *, solidpilot_base_url: str = "http://loca
 
 def build_deterministic_recovery_controller() -> Any:
     stack = load_stack()
-    registry = stack.recovery_registry_cls()
-    registry.register(stack.topology_solver_cls())
-    return stack.recovery_controller_cls(registry)
+    return stack.recovery_controller_cls(_build_recovery_registry(stack))
 
 
-def build_llm_repair_bridge(*, gateway: Any | None = None) -> Any:
+def build_llm_recovery_coordinator(*, gateway: Any | None = None) -> Any:
     stack = load_stack()
     active_gateway = gateway or stack.gateway_cls.from_environment()
-    diagnosis_agent = stack.diagnosis_agent_cls(active_gateway)
-    repair_agent = stack.repair_agent_cls(active_gateway)
-    return stack.legacy_repair_bridge_cls(diagnosis_agent, repair_agent)
+    agent = stack.agentic_engineering_loop_cls(active_gateway)
+    controller = stack.recovery_controller_cls(_build_recovery_registry(stack))
+    return stack.agentic_recovery_coordinator_cls(agent, controller)
+
+
+def _build_recovery_registry(stack: AiDesignerStackV1) -> Any:
+    registry = stack.recovery_registry_cls()
+    registry.register(stack.topology_solver_cls())
+    return registry
 
 
 def build_design_loop(*, compile_design: Any, execute_compiled: Any, verify_result: Any, diagnose: Any, repair: Any, validate_repair: Any) -> Any:
@@ -182,7 +192,7 @@ __all__ = [
     "build_canonical_pipeline",
     "build_design_loop",
     "build_deterministic_recovery_controller",
-    "build_llm_repair_bridge",
+    "build_llm_recovery_coordinator",
     "execute_canonical",
     "load_stack",
     "prepare_and_plan",
