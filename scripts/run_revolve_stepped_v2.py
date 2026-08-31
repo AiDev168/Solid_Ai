@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from pathlib import Path
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -15,6 +14,7 @@ from integration.axis_reference_v1 import (
     verify_materialized_axis,
 )
 from integration.revolve_reference_v1 import resolve_revolve_axis
+from integration.topology_edge_v1 import select_longest_usable_edge
 
 ROOT = REPOSITORY_ROOT
 REPO = ROOT / "vendor" / "q3ds-solidworks-mcp"
@@ -97,9 +97,6 @@ async def main() -> int:
             }, step)
             step += 1
 
-            # The backend revolve contract resolves the axis against the ACTIVE
-            # sketch. Re-materialize the semantic axis as construction geometry
-            # in every subsequent sketch that consumes the same axis.
             await call(session, "create_sketch", {"plane": "Front Plane"}, step); step += 1
             axis_command = materialize_axis_in_active_sketch(axis)
             axis_result = await call(session, "add_sketch_entity", axis_command, step); step += 1
@@ -154,19 +151,9 @@ async def main() -> int:
 
             edges = await call(session, "analyze_model", {"analysis_type": "edges"}, step); step += 1
             raw_edges = (((edges or {}).get("data") or {}).get("edges") or []) if isinstance(edges, dict) else []
-            usable = []
-            for edge in raw_edges:
-                start, end = edge.get("start"), edge.get("end")
-                if not isinstance(start, list) or not isinstance(end, list) or len(start) < 3 or len(end) < 3:
-                    continue
-                length2 = sum((float(end[i]) - float(start[i])) ** 2 for i in range(3))
-                if length2 > 1e-12:
-                    usable.append(edge)
-            if not usable:
-                raise RuntimeError("No usable edges found before fillet")
+            edge_index, edge_length = select_longest_usable_edge(raw_edges)
+            print(f"FILLET_EDGE_EVIDENCE: index={edge_index}, measured_length_m={edge_length}")
 
-            selected = max(usable, key=lambda e: float(e.get("length", 0.0)))
-            edge_index = int(selected["i"])
             await call(session, "add_edge_feature", {
                 "feature_type": "fillet",
                 "radius_or_distance": 0.003,
@@ -175,7 +162,7 @@ async def main() -> int:
             step += 1
 
             final = await call(session, "analyze_model", {"analysis_type": "geometry"}, step)
-            print("\\nPASS: stepped revolve + groove + hole + fillet")
+            print("\nPASS: stepped revolve + groove + hole + fillet")
             print(json.dumps(final, ensure_ascii=False, indent=2, default=str))
             return 0
 
