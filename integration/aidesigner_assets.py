@@ -1,4 +1,4 @@
-"""Evidence-backed CAD capability assets ported from Ai_Designer."""
+"""""Evidence-backed CAD capability assets ported from Ai_Designer and extended by live Solid_Ai evidence."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -25,6 +25,9 @@ CAPABILITIES: tuple[CapabilitySpec, ...] = (
     CapabilitySpec("model.analyze_geometry", "solidpilot", "analyze_model", "proven", "analysis_type=geometry", "geometry evidence present", "Ai_Designer proven runtime evidence"),
     CapabilitySpec("part.hole", "solidpilot", "extrude_feature", "proven", "circle sketch + cut/through", "COMPLETED; body preserved; volume decreases", "Ai_Designer SOLIDPILOT HOLE+FILLET LIVE V1.2"),
     CapabilitySpec("edge.fillet", "solidpilot", "add_edge_feature", "proven", "fillet + edge selector", "COMPLETED; topology changes", "Ai_Designer SOLIDPILOT HOLE+FILLET LIVE V1.2", "Prefer edge_indices from analyze_model over coordinate selection."),
+    CapabilitySpec("part.revolve", "solidpilot", "extrude_feature", "proven", "closed profile + resolved axis endpoints + angle", "COMPLETED + body geometry", "Solid_Ai stepped revolve + groove + hole + fillet live evidence"),
+    CapabilitySpec("part.revolve_cut", "solidpilot", "extrude_feature", "proven", "closed groove profile + resolved axis endpoints + angle", "COMPLETED + topology mutation", "Solid_Ai stepped revolve + groove + hole + fillet live evidence"),
+    CapabilitySpec("part.rib", "solidpilot", "create_rib", "candidate", "rib profile/support + native rib contract", "pending live semantic verification", "SolidPilot backend capability discovery; not yet promoted", "Never substitute extrude_boss for semantic rib."),
 )
 
 
@@ -72,22 +75,20 @@ def lower_boss(*, depth_m: float, reverse: bool = False, through: bool = False,
 
 
 def describe_capabilities() -> str:
-    lines = ["Ai_Designer proven CAD assets bound to SolidPilot:"]
+    lines = ["Ai_Designer + live Solid_Ai capability assets:"
+    ]
     lines.extend(f"- {s.capability_id} -> {s.tool} [{s.status}]" for s in CAPABILITIES)
     return "\n".join(lines)
 
 
 def select_fillet_edges(edge_analysis: dict[str, Any], *, z_min: float | None = None, z_max: float | None = None) -> str:
-    """Select runtime edge indices from analyze_model output instead of guessing coordinates.
-
-    Expected edge_analysis is a dict containing ``edges``. Each edge may expose
-    ``index`` and optional coordinate/endpoint metadata. Selection remains conservative:
-    only edges with an explicit integer index are returned.
-    """
     edges = edge_analysis.get("edges", [])
     selected: list[int] = []
     for edge in edges:
-        if not isinstance(edge, dict) or not isinstance(edge.get("index"), int):
+        if not isinstance(edge, dict):
+            continue
+        index = edge.get("index", edge.get("i"))
+        if not isinstance(index, int):
             continue
         if z_min is not None or z_max is not None:
             z_values: list[float] = []
@@ -100,5 +101,6 @@ def select_fillet_edges(edge_analysis: dict[str, Any], *, z_min: float | None = 
                     continue
                 if z_max is not None and min(z_values) > z_max:
                     continue
-        selected.append(edge["index"])
+        selected.append(index)
     return str(selected)
+""
