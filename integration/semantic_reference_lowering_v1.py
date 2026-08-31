@@ -5,6 +5,7 @@ from typing import Any, Mapping
 
 from .aidesigner_assets import get_capability
 from .feature_graph_compiler_v1 import CompiledFeature, CompiledPlan, Operation
+from .feature_graph_lowering_v1 import lower_hole_pattern
 from .runtime_reference_context_v1 import ReferenceBinding, RuntimeReferenceResolutionError
 
 
@@ -32,9 +33,13 @@ def _reference_id(value: Any) -> str | None:
 
 
 def materialize_hole_pattern(feature: CompiledFeature, bindings: Mapping[str, ReferenceBinding]) -> CompiledFeature:
-    source = dict(feature.operations[0].params)
+    lowered = lower_hole_pattern(feature)
+    source = dict(lowered.operations[0].params)
     reference_id = _reference_id(source.get("support_reference"))
     if reference_id is None:
+        face_index = source.get("face_index")
+        if isinstance(face_index, int) and face_index >= 0:
+            return lowered
         raise SemanticReferenceLoweringError(f"{feature.feature_id}: hole_pattern requires support_reference")
     binding = _binding(bindings, reference_id)
     try:
@@ -43,14 +48,14 @@ def materialize_hole_pattern(feature: CompiledFeature, bindings: Mapping[str, Re
         raise SemanticReferenceLoweringError(str(exc)) from exc
 
     rewritten = []
-    for operation in feature.operations:
+    for operation in lowered.operations:
         params = dict(operation.params)
         if operation.tool == "create_sketch":
             params.pop("support_reference", None)
             params["on_face"] = True
             params["face_index"] = face_index
         rewritten.append(replace(operation, params=params, phase="execute"))
-    return replace(feature, operations=tuple(rewritten))
+    return replace(lowered, operations=tuple(rewritten))
 
 
 def materialize_fillet(feature: CompiledFeature, bindings: Mapping[str, ReferenceBinding]) -> CompiledFeature:
@@ -116,7 +121,6 @@ def materialize_rib(feature: CompiledFeature, bindings: Mapping[str, ReferenceBi
 
 
 def materialize_plan(plan: CompiledPlan, bindings: Mapping[str, ReferenceBinding]) -> CompiledPlan:
-    """Resolve semantic references without discovering topology here."""
     features = []
     for feature in plan.features:
         if feature.capability.capability_id == "part.hole":
@@ -130,4 +134,10 @@ def materialize_plan(plan: CompiledPlan, bindings: Mapping[str, ReferenceBinding
     return replace(plan, features=tuple(features))
 
 
-__all__ = ["SemanticReferenceLoweringError", "materialize_fillet", "materialize_hole_pattern", "materialize_plan", "materialize_rib"]
+__all__ = [
+    "SemanticReferenceLoweringError",
+    "materialize_fillet",
+    "materialize_hole_pattern",
+    "materialize_plan",
+    "materialize_rib",
+]
