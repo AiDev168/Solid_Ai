@@ -86,10 +86,33 @@ def _map_benchmark_provider_env() -> None:
     os.environ.setdefault("AIDESIGNER_LLM_API_KEY", api_key)
 
 
+def _validate_llm_configuration() -> None:
+    """Prevent accidental fallback to an unconfigured local LM Studio endpoint."""
+    external_ready = all(
+        os.getenv(name)
+        for name in (
+            "AIDESIGNER_LLM_BASE_URL",
+            "AIDESIGNER_LLM_MODEL",
+            "AIDESIGNER_LLM_API_KEY",
+        )
+    )
+    lmstudio_opted_in = os.getenv("SOLID_AI_ALLOW_LMSTUDIO", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    if not external_ready and not lmstudio_opted_in:
+        raise AiDesignerCompositionError(
+            "No canonical external LLM is configured. Set BENCHMARK_PROVIDER/BASE_URL/MODEL/API_KEY "
+            "for GapGPT or set SOLID_AI_ALLOW_LMSTUDIO=1 to explicitly use Ai_Designer's LM Studio fallback."
+        )
+
+
 def load_stack() -> AiDesignerStackV1:
     """Load existing Ai_Designer components; do not reimplement them."""
     _bootstrap_source_tree()
     _map_benchmark_provider_env()
+    _validate_llm_configuration()
     try:
         gateway = importlib.import_module("ai_designer.llm.gateway")
         complex_pipeline = importlib.import_module("ai_designer.engineering.complex_engineering_pipeline_v1")
