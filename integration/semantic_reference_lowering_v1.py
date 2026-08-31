@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any, Mapping
 
+from .aidesigner_assets import get_capability
 from .feature_graph_compiler_v1 import CompiledFeature, CompiledPlan, Operation
 from .runtime_reference_context_v1 import ReferenceBinding, RuntimeReferenceResolutionError
 
@@ -14,24 +15,28 @@ class SemanticReferenceLoweringError(ValueError):
 def _binding(context: Mapping[str, ReferenceBinding], reference_id: str) -> ReferenceBinding:
     binding = context.get(reference_id)
     if binding is None:
-        raise SemanticReferenceLoweringError(
-            f"unbound semantic reference: {reference_id}"
-        )
+        raise SemanticReferenceLoweringError(f"unbound semantic reference: {reference_id}")
     if not binding.backend_indices:
-        raise SemanticReferenceLoweringError(
-            f"semantic reference has no backend binding: {reference_id}"
-        )
+        raise SemanticReferenceLoweringError(f"semantic reference has no backend binding: {reference_id}")
     return binding
+
+
+def _reference_id(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value
+    if isinstance(value, Mapping):
+        raw = value.get("reference_id")
+        if isinstance(raw, str) and raw.strip():
+            return raw
+    return None
 
 
 def materialize_hole_pattern(feature: CompiledFeature, bindings: Mapping[str, ReferenceBinding]) -> CompiledFeature:
     source = dict(feature.operations[0].params)
-    support_ref = source.get("support_reference")
-    if not isinstance(support_ref, str) or not support_ref.strip():
-        raise SemanticReferenceLoweringError(
-            f"{feature.feature_id}: hole_pattern requires support_reference"
-        )
-    binding = _binding(bindings, support_ref)
+    reference_id = _reference_id(source.get("support_reference"))
+    if reference_id is None:
+        raise SemanticReferenceLoweringError(f"{feature.feature_id}: hole_pattern requires support_reference")
+    binding = _binding(bindings, reference_id)
     try:
         face_index = binding.backend_index
     except RuntimeReferenceResolutionError as exc:
@@ -50,12 +55,10 @@ def materialize_hole_pattern(feature: CompiledFeature, bindings: Mapping[str, Re
 
 def materialize_fillet(feature: CompiledFeature, bindings: Mapping[str, ReferenceBinding]) -> CompiledFeature:
     source = dict(feature.operations[0].params)
-    selection_ref = source.get("selection_reference")
-    if not isinstance(selection_ref, str) or not selection_ref.strip():
-        raise SemanticReferenceLoweringError(
-            f"{feature.feature_id}: fillet requires selection_reference"
-        )
-    binding = _binding(bindings, selection_ref)
+    reference_id = _reference_id(source.get("selection_reference"))
+    if reference_id is None:
+        raise SemanticReferenceLoweringError(f"{feature.feature_id}: fillet requires selection_reference")
+    binding = _binding(bindings, reference_id)
     return replace(feature, operations=(
         Operation(
             feature.feature_id,
@@ -71,22 +74,60 @@ def materialize_fillet(feature: CompiledFeature, bindings: Mapping[str, Referenc
     ))
 
 
+def materialize_rib(feature: CompiledFeature, bindings: Mapping[str, ReferenceBinding]) -> CompiledFeature:
+    source = dict(feature.operations[0].params)
+    reference_id = _reference_id(source.get("support_reference"))
+    if reference_id is None:
+        raise SemanticReferenceLoweringError(f"{feature.feature_id}: rib requires support_reference")
+    binding = _binding(bindings, reference_id)
+    face_index = binding.backend_index
+
+    x_center_m = float(source["x_center_mm"]) / 1000.0
+    half_width_m = float(source["width_mm"]) / 2000.0
+    half_span_m = float(source["span_mm"]) / 2000.0
+    height_m = float(source["height_mm"]) / 1000.0
+
+    create_cap = get_capability("part.create_sketch")
+    boss_cap = get_capability("part.extrude_boss")
+    if create_cap is None or boss_cap is None:
+        raise SemanticReferenceLoweringError("rib lowering requires proven create_sketch and extrude_boss capabilities")
+
+    return replace(feature, operations=(
+        Operation(feature.feature_id, create_cap.capability_id, "create_sketch", {
+            "on_face": True,
+            "face_index": face_index,
+        }, phase="execute"),
+        Operation(feature.feature_id, create_cap.capability_id, "add_sketch_entity", {
+            "entity_type": "rectangle",
+            "x1": x_center_m - half_width_m,
+            "y1": -half_span_m,
+            "x2": x_center_m + half_width_m,
+            "y2": half_span_m,
+        }, phase="execute"),
+        Operation(feature.feature_id, boss_cap.capability_id, "extrude_feature", {
+            "depth": height_m,
+            "feature_type": "boss",
+            "reverse": False,
+            "through": False,
+            "up_to_face_index": -1,
+            "mid_plane": False,
+        }, phase="execute"),
+    ))
+
+
 def materialize_plan(plan: CompiledPlan, bindings: Mapping[str, ReferenceBinding]) -> CompiledPlan:
-    """Resolve all semantic reference markers without discovering topology here."""
+    """Resolve semantic references without discovering topology here."""
     features = []
     for feature in plan.features:
         if feature.capability.capability_id == "part.hole":
             features.append(materialize_hole_pattern(feature, bindings))
         elif feature.capability.capability_id == "edge.fillet":
             features.append(materialize_fillet(feature, bindings))
+        elif feature.capability.capability_id == "part.rib":
+            features.append(materialize_rib(feature, bindings))
         else:
             features.append(feature)
     return replace(plan, features=tuple(features))
 
 
-__all__ = [
-    "SemanticReferenceLoweringError",
-    "materialize_fillet",
-    "materialize_hole_pattern",
-    "materialize_plan",
-]
+__all__ = ["SemanticReferenceLoweringError", "materialize_fillet", "materialize_hole_pattern", "materialize_plan", "materialize_rib"]
