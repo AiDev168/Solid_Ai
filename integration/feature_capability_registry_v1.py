@@ -49,15 +49,16 @@ class FeatureCapabilityRegistryV1:
 
 
 def build_default_feature_capability_registry() -> FeatureCapabilityRegistryV1:
-    capability_ids = (
+    bindings: list[FeatureCapabilityBinding] = []
+    for feature_kind, capability_id in (
         ("profile", "part.create_sketch"),
         ("extrude_boss", "part.extrude_boss"),
         ("hole_pattern", "part.hole"),
-        ("rib", "part.extrude_boss"),
+        ("rib", "part.rib"),
         ("fillet", "edge.fillet"),
-    )
-    bindings: list[FeatureCapabilityBinding] = []
-    for feature_kind, capability_id in capability_ids:
+        ("revolve", "part.revolve"),
+        ("revolve_cut", "part.revolve_cut"),
+    ):
         capability = get_capability(capability_id)
         if capability is None:
             raise KeyError(f"capability registry missing: {capability_id}")
